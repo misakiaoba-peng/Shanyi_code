@@ -1,1 +1,2 @@
-# BrianShan
+我是单昳(Brian), 目前在纽约大学就读金融数学硕士，2020年底毕业。于2020年6月29日开始在淘利实习。
+我的邮箱是:shanyi_brian@hotmail.com
