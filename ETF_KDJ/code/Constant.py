@@ -33,4 +33,5 @@ margin_percent = {
 
 margin_multiplier = 3
 
+log_path = os.path.dirname(os.path.realpath(__file__)) + "\\..\\log"
 output_path = os.path.dirname(os.path.realpath(__file__)) + "\\..\\result"

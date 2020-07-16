@@ -6,9 +6,10 @@
 # ToDo: 目前是从dolphindb_data里取一分钟的数据重新组合成15分钟
 #       原因是15分钟的数据目前有问题，等待技术部门更新
 
-# %%
+
 import os
 import numpy as np
+np.seterr(divide = 'ignore', invalid='ignore')
 import pandas as pd
 from datetime import datetime, timedelta
 from matplotlib import pyplot as plt
@@ -17,11 +18,15 @@ from typing import List
 
 from Dolphindb_Data import GetData
 from Generate_Min_Data import generate_any_minute_data
-from Constant import trade_time, future_multiplier, margin_percent, margin_multiplier, output_path
+from Constant import trade_time, future_multiplier, margin_percent, margin_multiplier, output_path, log_path
+
+import logging
+import logging.handlers
+
 
 class ETF_KDJ_LongShort(object):
     def __init__(self, ETF_sym:List[str], future_sym: List[str], 
-                start:str, end:str, cycle:int = 1):
+                start:str, end:str, cycle:int = 1, logger = None):
         """
         Constuctor: 
 
@@ -32,6 +37,7 @@ class ETF_KDJ_LongShort(object):
             end: str，结束日期， 格式为'yyyy.mm.dd' e.g. '2020.07.06', 
                     dataEnd必须要比dataStart晚
             circle: int,  策略所需要的分钟数
+            logger: logger class
         """
         self.count: int = 0
         self.ETF_sym = ETF_sym
@@ -42,6 +48,22 @@ class ETF_KDJ_LongShort(object):
         self.start = start
         self.end = end
         self.cycle: int = cycle
+        if logger is None:
+            self.logger = logging.getLogger('ETF_KDJ_LongShort')
+            logger.setLevel(logging.DEBUG)
+            ch = logging.StreamHandler()
+            ch.setLevel(logging.DEBUG)
+            fh = logging.handlers.RotatingFileHandler(os.path.join(log_path, 'log.txt'), maxBytes=2000, backupCount=5)
+            fh.setLevel(logging.DEBUG)
+            formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+            fh.setFormatter(formatter)
+            ch.setFormatter(formatter)
+            # add the handlers to the logger
+            self.logger.addHandler(fh)
+            self.logger.addHandler(ch)
+        else:
+            self.logger = logger
+
         self.money= 100_000_000
         self.get = GetData()
         self.close_df = None
@@ -95,7 +117,7 @@ class ETF_KDJ_LongShort(object):
         for prod in self.future_sym:
             idx_nan = np.where(self.close_sell_df[prod].isnull())[0]
             if len(idx_nan) > 0 and len(idx_nan) != idx_nan[-1] + 1:
-                print(f"WARNING: there are missing close price in future: {prod}")
+                self.logger.warning(f"there are missing close price in future: {prod}")
         
         self.close_buy_df.fillna(method = 'ffill', inplace = True)
         self.close_sell_df.fillna(method = 'ffill', inplace = True)
@@ -127,7 +149,7 @@ class ETF_KDJ_LongShort(object):
             self.close_df = self.close_df.join(data, how = "outer", sort = True)  
         idx_nan = np.where(self.close_df[sym].isnull())[0]
         if len(idx_nan) > 0 and len(idx_nan) != idx_nan[-1] + 1:
-            print(f"WARNING: there are missing close price in stock: {sym}")
+            self.logger.warning(f"there are missing close price in stock: {sym}")
 
     def future_handler(self, data: pd.DataFrame, dateStart_buy: datetime, dateStart_sell:datetime):
         prod = data['product'].iloc[0]
@@ -289,6 +311,21 @@ class ETF_KDJ_LongShort(object):
 
 if __name__ == '__main__':
     import time
+    logger = logging.getLogger('ETF_KDJ_LongShort')
+    logger.setLevel(logging.DEBUG)
+    ch = logging.StreamHandler()
+    ch.setLevel(logging.DEBUG)
+    fh = logging.handlers.RotatingFileHandler(os.path.join(log_path, 'log.txt'), maxBytes=10240, backupCount=5)
+    fh.setLevel(logging.DEBUG)
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    fh.setFormatter(formatter)
+    ch.setFormatter(formatter)
+    # add the handlers to the logger
+    logger.addHandler(fh)
+    logger.addHandler(ch)
+
+    logger.debug("hi")
+
     whole_list = ['510300','510330','510050','159919','510310','159949','510500',
         '159915','512500', '159968','515800','512990','512380','512160','512090',
         '159995','512760','515050','159801','512480','512290','159992','512170',
@@ -305,18 +342,18 @@ if __name__ == '__main__':
     summary_df = pd.DataFrame(index = [], 
         columns = ['StochLen1', 'StochLen2', 'SmoothingLen1', 'SmoothingLen2', 'weight', \
             '累计收益率', 'Sharpe', '年化收益', '盈亏比', '最大日收益率', '最大日亏损率', '最大回撤', 'MAR'])
-
     future_list = ['IH', 'IF', 'IC', 'TF', "T"]
 
     start = '2016.01.01'
-    end = '2018.01.01'
-    c = ETF_KDJ_LongShort(select_list, future_list, start, end, 15)
+    end = '2016.02.01'
 
-    print(f"Load data {start}-{end} finished")
     # 参数
-    StochLen = [5, 9, 18, 25, 34, 46, 72, 89]
-    SmoothingLen = [3, 8, 13, 18]
-    weight = [0.2, 0.4, 0.6, 0.8]
+    # StochLen = [5, 9, 18, 25, 34, 46, 72, 89]
+    # SmoothingLen = [3, 8, 13, 18]
+    # weight = [0.2, 0.4, 0.6, 0.8]
+    StochLen = [5, 9]
+    SmoothingLen = [3, 8]
+    weight = [0.2, 0.4]
     # args = {
     #         'StochLen1' : 6,
     #         'StochLen2' : 18,
@@ -325,6 +362,9 @@ if __name__ == '__main__':
     #         'weight': 0.7,
     #     }
 
+    c = ETF_KDJ_LongShort(select_list, future_list, start, end, 15, logger = logger)
+
+    logger.info(f"Load data {start}-{end} finished")
     for i in range(len(StochLen)-1):
         for j in range(i+1, len(StochLen)):
             for k in SmoothingLen:
@@ -336,12 +376,12 @@ if __name__ == '__main__':
                         args['SmoothingLen1'] = k
                         args['SmoothingLen2'] = l
                         args['weight'] = m
-                        print(f"start Args:{','.join([str(i) for i  in args.values()])}" )
-                        start = time.time()
 
+                        logger.info(f"start Args:{','.join([str(i) for i  in args.values()])}")
+                        
+                        start_time = time.time()
                         c.Backtest(**args)
-
-                        print(f"Time used: {time.time() - start}s")
+                        logger.info(f"Time used: {time.time() - start_time}s")
 
                         # 导出数据
                         writer = pd.ExcelWriter(os.path.join(
