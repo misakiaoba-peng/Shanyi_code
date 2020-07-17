@@ -290,7 +290,7 @@ class ETF_KDJ_LongShort(object):
         outdir = os.path.join(output_path, f"{self.start}_{self.end}")
         if not os.path.exists(outdir):
             os.mkdir(outdir)
-        plt.savefig(os.path.join(out_dir, 
+        plt.savefig(os.path.join(outdir, 
             f"total_asset_{source.index[0].strftime('%y%m%d')}_{source.index[-1].strftime('%y%m%d')}" + \
                 f"_{self.StochLen1}_{self.StochLen2}_{self.SmoothingLen1}_{self.SmoothingLen2}_{self.weight}.png"))
         plt.close()
