@@ -6,7 +6,6 @@
 # ToDo: 目前是从dolphindb_data里取一分钟的数据重新组合成15分钟
 #       原因是15分钟的数据目前有问题，等待技术部门更新
 
-
 import os
 import numpy as np
 np.seterr(divide = 'ignore', invalid='ignore')
@@ -25,24 +24,9 @@ from multiprocessing import Pool, freeze_support
 import logging
 import logging.handlers
 
-
-# logging setup
-logger = logging.getLogger('ETF_KDJ_LongShort')
-logger.setLevel(logging.DEBUG)
-ch = logging.StreamHandler()
-ch.setLevel(logging.DEBUG)
-fh = logging.handlers.RotatingFileHandler(os.path.join(log_path, 'log.txt'), maxBytes=10240, backupCount=5)
-fh.setLevel(logging.DEBUG)
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-fh.setFormatter(formatter)
-ch.setFormatter(formatter)
-logger.addHandler(fh)
-logger.addHandler(ch)
-
-
 class ETF_KDJ_LongShort(object):
     def __init__(self, ETF_sym:List[str], future_sym: List[str], 
-                start:str, end:str, cycle:int = 1):
+                start:str, end:str, cycle:int = 1, logger = None):
         """
         Constuctor: 
 
@@ -68,6 +52,17 @@ class ETF_KDJ_LongShort(object):
         self.money= 100_000_000
         self.get = GetData()
         self.close_df = None
+
+        if logger is None:
+            self.logger = logging.getLogger(f'ETF_KDJ_LongShort')
+            self.logger.setLevel(logging.DEBUG)
+            ch = logging.StreamHandler()
+            ch.setLevel(logging.DEBUG)
+            formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+            ch.setFormatter(formatter)
+            logger.addHandler(ch)
+        else:
+            self.logger = logger
 
         self.load_data()
         
@@ -118,8 +113,9 @@ class ETF_KDJ_LongShort(object):
         for prod in self.future_sym:
             idx_nan = np.where(self.close_sell_df[prod].isnull())[0]
             if len(idx_nan) > 0 and len(idx_nan) != idx_nan[-1] + 1:
-                logger.warning(f"there are missing close price in future: {prod} between {self.start}-{self.end}")
+                self.logger.warning(f"there are missing close price in future: {prod} between {self.start}-{self.end}")
         
+        # deal with missing data
         self.close_buy_df.fillna(method = 'ffill', inplace = True)
         self.close_sell_df.fillna(method = 'ffill', inplace = True)
 
@@ -153,7 +149,7 @@ class ETF_KDJ_LongShort(object):
             self.close_df = self.close_df.join(data, how = "outer", sort = True)  
         idx_nan = np.where(self.close_df[sym].isnull())[0]
         if len(idx_nan) > 0 and len(idx_nan) != idx_nan[-1] + 1:
-            logger.warning(f"there are missing close price in stock: {sym} between {self.start}-{self.end}")
+            self.logger.warning(f"there are missing close price in stock: {sym} between {self.start}-{self.end}")
 
     def future_handler(self, data: pd.DataFrame, dateStart_buy: datetime, dateStart_sell:datetime):
         """
@@ -225,56 +221,36 @@ class ETF_KDJ_LongShort(object):
         """
         生成每天的仓位
         """
-        self.lots = pd.DataFrame(
-            index = self.close_buy_df.index, 
-            columns = self.close_buy_df.columns
-            )
-        self.lots['cash'] = np.nan
-        self.lots['total asset'] = self.money
+        
         init = False
         lots_hold = None
         cash = None
         future_buy_price = None
         index_MoneyRatio = self.MoneyRatio0.index
 
-        MoneyRatio0_mat = self.MoneyRatio0.values
-        close_buy_mat = self.close_buy_df.values
-        close_sell_mat = self.close_sell_df.values
-        for idx in range(len(MoneyRatio0_mat)):
-            row = MoneyRatio0_mat[idx]
-            if np.isnan(row).all():
-                continue
-            i = index_MoneyRatio[idx]
-            if not init:
-                self.lots.loc[i, self.ETF_sym] = (row[:self.num_ETF] * self.money) / close_buy_mat[idx,:self.num_ETF] // 100 * 100
-                cash = self.lots.at[i, 'total asset'] - np.nansum(self.lots.loc[i,self.ETF_sym].values * close_buy_mat[idx, :self.num_ETF])
-                for j in range(self.num_future):
-                    prod = self.future_sym[j]
-                    cost_perhand = margin_percent[prod] * margin_multiplier * future_multiplier[prod] * \
-                                close_buy_mat[idx,self.num_ETF + j] 
-                    self.lots.loc[i, prod] = (row[self.num_ETF + j] * self.money) // cost_perhand
-                init = True
-            else:
-                total_asset = np.nansum(lots_hold[:self.num_ETF] * close_sell_mat[idx, :self.num_ETF]) + cash
-                for j in range(self.num_future):
-                    # 期货的利润
-                    prod_idx = self.num_ETF + j
-                    if not np.isnan(lots_hold[prod_idx]):
-                        total_asset += lots_hold[prod_idx] * (close_sell_mat[idx, prod_idx] - future_buy_price[j]) * future_multiplier[self.future_sym[j]]
+        MoneyRatio0_mat = self.MoneyRatio0.fillna(0).values
+        close_buy_mat = self.close_buy_df.fillna(0).values
+        close_sell_mat = self.close_sell_df.fillna(0).values
+        
+        cost_perhand_mat = np.full(MoneyRatio0_mat.shape, 100)
+        cost_perhand_mat[:, -self.num_future:] = np.array([margin_percent[prod] * margin_multiplier * future_multiplier[prod] for prod in self.future_sym])
+        cost_perhand_mat = cost_perhand_mat * close_buy_mat
+        
+        num_perhand_mat = np.full(MoneyRatio0_mat.shape, 100)
+        num_perhand_mat[:, -self.num_future:] = np.array([future_multiplier[prod] for prod in self.future_sym])
 
-                self.lots.loc[i, self.ETF_sym] = (row[:self.num_ETF] * total_asset)/close_buy_mat[idx,:self.num_ETF] // 100 * 100
-                cash = total_asset - np.nansum(self.lots.loc[i, self.ETF_sym].values * close_buy_mat[idx,:self.num_ETF])
-                self.lots.loc[i, 'total asset'] = total_asset
-                
-                for j in range(self.num_future):
-                    prod = self.future_sym[j]
-                    cost_perhand = margin_percent[prod] * margin_multiplier * future_multiplier[prod] * close_buy_mat[idx, self.num_ETF + j] 
-                    self.lots.loc[i, prod] = (row[self.num_ETF+j] * self.money) // cost_perhand
-                
-            lots_hold = self.lots.loc[i, self.close_buy_df.columns].values
-            future_buy_price = close_buy_mat[idx, -self.num_future:]
-            self.lots.loc[i, 'cash'] = cash
+        hand_mat = MoneyRatio0_mat * self.money // cost_perhand_mat
+        
+        pnl = np.nansum((close_sell_mat[1:, :] - close_buy_mat[:-1, :]) * hand_mat[:-1, :] * num_perhand_mat[:-1, :], axis = 1)
 
+        self.lots = pd.DataFrame(
+            hand_mat,
+            index = self.close_buy_df.index, 
+            columns = self.close_buy_df.columns
+            )
+        self.lots['PnL'] = np.concatenate(([0], pnl))
+        self.lots['total asset'] = self.lots['PnL'].cumsum() + self.money
+                
     def performance(self):
         """
         生成报告
@@ -334,11 +310,26 @@ def run(start: str, end: str, ETF_ls: list, future_ls:list,
         columns = ['StochLen1', 'StochLen2', 'SmoothingLen1', 'SmoothingLen2', 'weight', \
             '累计收益率', 'Sharpe', '年化收益', '盈亏比', '最大日收益率', '最大日亏损率', '最大回撤', 'MAR'])
 
+    # 生成输出的文件夹
     outdir = os.path.join(output_path, f"{start}_{end}")
     if not os.path.exists(outdir):
         os.mkdir(outdir)
 
-    c = ETF_KDJ_LongShort(ETF_ls, future_ls, start, end, cycle)
+    # logging setup
+    logger = logging.getLogger(f'ETF_KDJ_LongShort_{start}_{end}')
+    logger.setLevel(logging.DEBUG)
+    ch = logging.StreamHandler()
+    ch.setLevel(logging.DEBUG)
+    fh = logging.handlers.RotatingFileHandler(os.path.join(log_path, f'log_{start}_{end}.txt'), maxBytes=5120, backupCount=10)
+    fh.setLevel(logging.DEBUG)
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    fh.setFormatter(formatter)
+    ch.setFormatter(formatter)
+    logger.addHandler(fh)
+    logger.addHandler(ch)
+
+
+    c = ETF_KDJ_LongShort(ETF_ls, future_ls, start, end, cycle, logger)
     logger.info(f"Load data {start}-{end} finished")
     for i in range(len(StochLen)-1):
         for j in range(i+1, len(StochLen)):
@@ -396,7 +387,7 @@ def run(start: str, end: str, ETF_ls: list, future_ls:list,
 
                         summary_df.loc[len(summary_df)] = list(args.values()) + list(c.result.values[0])
 
-    summary_df.to_csv(os.path.join(our_dir, f'summary_{start}_{end}.csv'), encoding='utf_8_sig', index = False)
+    summary_df.to_csv(os.path.join(outdir, f'summary_{start}_{end}.csv'), encoding='utf_8_sig', index = False)
 
 
 if __name__ == '__main__':
@@ -424,6 +415,7 @@ if __name__ == '__main__':
     weight = [0.2, 0.4, 0.6, 0.8]
 
     start_train = ['2016.01.01', '2017.01.01', '2018.01.01']
+    # end_train = ['2016.02.01', '2017.02.01', '2018.02.01']
     end_train = ['2018.01.01', '2019.01.01', '2020.01.01']
     
     pool = Pool()
@@ -436,4 +428,3 @@ if __name__ == '__main__':
 
     for i in results:
         i.get()
-
