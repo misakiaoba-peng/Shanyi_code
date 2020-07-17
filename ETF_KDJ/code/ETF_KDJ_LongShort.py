@@ -20,12 +20,13 @@ from Dolphindb_Data import GetData
 from Generate_Min_Data import generate_any_minute_data
 from Constant import trade_time, future_multiplier, margin_percent, margin_multiplier, output_path, log_path
 
-
 import time
 from multiprocessing import Pool, freeze_support
 import logging
 import logging.handlers
 
+
+# logging setup
 logger = logging.getLogger('ETF_KDJ_LongShort')
 logger.setLevel(logging.DEBUG)
 ch = logging.StreamHandler()
@@ -35,7 +36,6 @@ fh.setLevel(logging.DEBUG)
 formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 fh.setFormatter(formatter)
 ch.setFormatter(formatter)
-# add the handlers to the logger
 logger.addHandler(fh)
 logger.addHandler(ch)
 
@@ -138,6 +138,9 @@ class ETF_KDJ_LongShort(object):
         self.performance()
 
     def etf_handler(self, data: pd.DataFrame):
+        """
+        处理单个ETF数据
+        """
         sym = data['symbol'].iloc[0]
         data.set_index('date', inplace = True)
         data = data.rename(columns = {'close': sym})[[sym]]
@@ -153,6 +156,9 @@ class ETF_KDJ_LongShort(object):
             logger.warning(f"there are missing close price in stock: {sym} between {self.start}-{self.end}")
 
     def future_handler(self, data: pd.DataFrame, dateStart_buy: datetime, dateStart_sell:datetime):
+        """
+        处理单个期货品种数据
+        """
         prod = data['product'].iloc[0]
         data.set_index('date', inplace = True)
         data = data.rename(columns = {'close': prod})[[prod]]
@@ -216,7 +222,9 @@ class ETF_KDJ_LongShort(object):
         self.MoneyRatio0[self.MoneyRatio0 < -0.1] = -0.1
 
     def generate_lots(self):
-        # 生成每天的仓位
+        """
+        生成每天的仓位
+        """
         self.lots = pd.DataFrame(
             index = self.close_buy_df.index, 
             columns = self.close_buy_df.columns
@@ -268,6 +276,9 @@ class ETF_KDJ_LongShort(object):
             self.lots.loc[i, 'cash'] = cash
 
     def performance(self):
+        """
+        生成报告
+        """
         source = self.lots[['total asset']].resample('1D').last()
         source.dropna(inplace = True)
         
@@ -275,7 +286,11 @@ class ETF_KDJ_LongShort(object):
         plt.plot(source['total asset'])
         plt.ylabel('Yuan')
         plt.title(f"Total Asset Time Series Graph during {source.index[0].strftime('%y%m%d')}-{source.index[-1].strftime('%y%m%d')}")
-        plt.savefig(os.path.join(output_path,
+        
+        outdir = os.path.join(output_path, f"{self.start}_{self.end}")
+        if not os.path.exists(outdir):
+            os.mkdir(outdir)
+        plt.savefig(os.path.join(out_dir, 
             f"total_asset_{source.index[0].strftime('%y%m%d')}_{source.index[-1].strftime('%y%m%d')}" + \
                 f"_{self.StochLen1}_{self.StochLen2}_{self.SmoothingLen1}_{self.SmoothingLen2}_{self.weight}.png"))
         plt.close()
@@ -310,11 +325,18 @@ class ETF_KDJ_LongShort(object):
         #     'nav'].resample('1M').first() - 1
 
 
-def run(start, end, ETF_ls, future_ls, StochLen, SmoothingLen, weight, cycle):
-    # 参数
+def run(start: str, end: str, ETF_ls: list, future_ls:list, 
+            StochLen:list, SmoothingLen:list, weight:list, cycle:"int > 0"):
+    """
+    主程序
+    """
     summary_df = pd.DataFrame(index = [], 
         columns = ['StochLen1', 'StochLen2', 'SmoothingLen1', 'SmoothingLen2', 'weight', \
             '累计收益率', 'Sharpe', '年化收益', '盈亏比', '最大日收益率', '最大日亏损率', '最大回撤', 'MAR'])
+
+    outdir = os.path.join(output_path, f"{start}_{end}")
+    if not os.path.exists(outdir):
+        os.mkdir(outdir)
 
     c = ETF_KDJ_LongShort(ETF_ls, future_ls, start, end, cycle)
     logger.info(f"Load data {start}-{end} finished")
@@ -339,7 +361,7 @@ def run(start, end, ETF_ls, future_ls, StochLen, SmoothingLen, weight, cycle):
 
                         # 导出数据
                         writer = pd.ExcelWriter(os.path.join(
-                            output_path, 
+                            outdir,
                             f"KDJ_Arg_{c.start}_{c.end}_{'_'.join([str(i) for i  in args.values()])}.xlsx"
                             ))
                         pd.DataFrame(args.items()).to_excel(writer, sheet_name = "参数表")
@@ -360,8 +382,8 @@ def run(start, end, ETF_ls, future_ls, StochLen, SmoothingLen, weight, cycle):
                         # c.Kvalue_l.to_excel(writer, sheet_name = "长期K值")
                         # c.Dvalue_l.to_excel(writer, sheet_name = "长期D值")
                         # c.Jvalue_l.to_excel(writer, sheet_name = "长期J值")
-                        c.close_buy_df.to_excel(writer, sheet_name = "买入价")
-                        c.close_sell_df.to_excel(writer, sheet_name = "卖出价")
+                        # c.close_buy_df.to_excel(writer, sheet_name = "买入价")
+                        # c.close_sell_df.to_excel(writer, sheet_name = "卖出价")
                         c.indicator.to_excel(writer, sheet_name = "Indicator")
                         # c.avg_indicator.to_excel(writer, sheet_name = "AvgIndicator")
                         # c.ReIndicator.to_excel(writer, sheet_name = "ReIndicator")
@@ -374,7 +396,7 @@ def run(start, end, ETF_ls, future_ls, StochLen, SmoothingLen, weight, cycle):
 
                         summary_df.loc[len(summary_df)] = list(args.values()) + list(c.result.values[0])
 
-    summary_df.to_csv(os.path.join(output_path, f'summary_{start}_{end}.csv'), encoding='utf_8_sig', index = False)
+    summary_df.to_csv(os.path.join(our_dir, f'summary_{start}_{end}.csv'), encoding='utf_8_sig', index = False)
 
 
 if __name__ == '__main__':
