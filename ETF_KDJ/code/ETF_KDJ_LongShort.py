@@ -265,7 +265,7 @@ class ETF_KDJ_LongShort(object):
         
         outdir = os.path.join(output_path, f"{self.start}_{self.end}")
         if not os.path.exists(outdir):
-            os.mkdir(outdir)
+            os.makedirs(outdir, exist_ok = True)
         plt.savefig(os.path.join(outdir, 
             f"total_asset_{source.index[0].strftime('%y%m%d')}_{source.index[-1].strftime('%y%m%d')}" + \
                 f"_{self.StochLen1}_{self.StochLen2}_{self.SmoothingLen1}_{self.SmoothingLen2}_{self.weight}.png"))
@@ -313,7 +313,9 @@ def run(start: str, end: str, ETF_ls: list, future_ls:list,
     # 生成输出的文件夹
     outdir = os.path.join(output_path, f"{start}_{end}")
     if not os.path.exists(outdir):
-        os.mkdir(outdir)
+        os.makedirs(outdir, exist_ok = True)
+    if not os.path.exists(log_path):
+    	os.makedirs(log_path, exist_ok = True)
 
     # logging setup
     logger = logging.getLogger(f'ETF_KDJ_LongShort_{start}_{end}')
@@ -422,7 +424,7 @@ if __name__ == '__main__':
     results = []
     for start, end in zip(start_train, end_train):
         results.append(pool.apply_async(run, 
-            args = (start, end, select_list, future_list, StochLen, SmoothingLen, weight, 15)))
+            args = (start, end, whole_list, future_list, StochLen, SmoothingLen, weight, 15)))
     pool.close()
     pool.join
 
