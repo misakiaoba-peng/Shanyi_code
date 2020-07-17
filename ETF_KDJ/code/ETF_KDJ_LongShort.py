@@ -20,13 +20,29 @@ from Dolphindb_Data import GetData
 from Generate_Min_Data import generate_any_minute_data
 from Constant import trade_time, future_multiplier, margin_percent, margin_multiplier, output_path, log_path
 
+
+import time
+from multiprocessing import Pool, freeze_support
 import logging
 import logging.handlers
+
+logger = logging.getLogger('ETF_KDJ_LongShort')
+logger.setLevel(logging.DEBUG)
+ch = logging.StreamHandler()
+ch.setLevel(logging.DEBUG)
+fh = logging.handlers.RotatingFileHandler(os.path.join(log_path, 'log.txt'), maxBytes=10240, backupCount=5)
+fh.setLevel(logging.DEBUG)
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+fh.setFormatter(formatter)
+ch.setFormatter(formatter)
+# add the handlers to the logger
+logger.addHandler(fh)
+logger.addHandler(ch)
 
 
 class ETF_KDJ_LongShort(object):
     def __init__(self, ETF_sym:List[str], future_sym: List[str], 
-                start:str, end:str, cycle:int = 1, logger = None):
+                start:str, end:str, cycle:int = 1):
         """
         Constuctor: 
 
@@ -48,21 +64,6 @@ class ETF_KDJ_LongShort(object):
         self.start = start
         self.end = end
         self.cycle: int = cycle
-        if logger is None:
-            self.logger = logging.getLogger('ETF_KDJ_LongShort')
-            logger.setLevel(logging.DEBUG)
-            ch = logging.StreamHandler()
-            ch.setLevel(logging.DEBUG)
-            fh = logging.handlers.RotatingFileHandler(os.path.join(log_path, 'log.txt'), maxBytes=2000, backupCount=5)
-            fh.setLevel(logging.DEBUG)
-            formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-            fh.setFormatter(formatter)
-            ch.setFormatter(formatter)
-            # add the handlers to the logger
-            self.logger.addHandler(fh)
-            self.logger.addHandler(ch)
-        else:
-            self.logger = logger
 
         self.money= 100_000_000
         self.get = GetData()
@@ -117,7 +118,7 @@ class ETF_KDJ_LongShort(object):
         for prod in self.future_sym:
             idx_nan = np.where(self.close_sell_df[prod].isnull())[0]
             if len(idx_nan) > 0 and len(idx_nan) != idx_nan[-1] + 1:
-                self.logger.warning(f"there are missing close price in future: {prod}")
+                logger.warning(f"there are missing close price in future: {prod} between {self.start}-{self.end}")
         
         self.close_buy_df.fillna(method = 'ffill', inplace = True)
         self.close_sell_df.fillna(method = 'ffill', inplace = True)
@@ -149,7 +150,7 @@ class ETF_KDJ_LongShort(object):
             self.close_df = self.close_df.join(data, how = "outer", sort = True)  
         idx_nan = np.where(self.close_df[sym].isnull())[0]
         if len(idx_nan) > 0 and len(idx_nan) != idx_nan[-1] + 1:
-            self.logger.warning(f"there are missing close price in stock: {sym}")
+            logger.warning(f"there are missing close price in stock: {sym} between {self.start}-{self.end}")
 
     def future_handler(self, data: pd.DataFrame, dateStart_buy: datetime, dateStart_sell:datetime):
         prod = data['product'].iloc[0]
@@ -276,7 +277,7 @@ class ETF_KDJ_LongShort(object):
         plt.title(f"Total Asset Time Series Graph during {source.index[0].strftime('%y%m%d')}-{source.index[-1].strftime('%y%m%d')}")
         plt.savefig(os.path.join(output_path,
             f"total_asset_{source.index[0].strftime('%y%m%d')}_{source.index[-1].strftime('%y%m%d')}" + \
-                f"_{c.StochLen1}_{c.StochLen2}_{c.SmoothingLen1}_{c.SmoothingLen2}_{c.weight}.png"))
+                f"_{self.StochLen1}_{self.StochLen2}_{self.SmoothingLen1}_{self.SmoothingLen2}_{self.weight}.png"))
         plt.close()
 
         source['ret'] = source['total asset'].pct_change(1)
@@ -309,61 +310,13 @@ class ETF_KDJ_LongShort(object):
         #     'nav'].resample('1M').first() - 1
 
 
-if __name__ == '__main__':
-    import time
-    logger = logging.getLogger('ETF_KDJ_LongShort')
-    logger.setLevel(logging.DEBUG)
-    ch = logging.StreamHandler()
-    ch.setLevel(logging.DEBUG)
-    fh = logging.handlers.RotatingFileHandler(os.path.join(log_path, 'log.txt'), maxBytes=10240, backupCount=5)
-    fh.setLevel(logging.DEBUG)
-    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    fh.setFormatter(formatter)
-    ch.setFormatter(formatter)
-    # add the handlers to the logger
-    logger.addHandler(fh)
-    logger.addHandler(ch)
-
-    logger.debug("hi")
-
-    whole_list = ['510300','510330','510050','159919','510310','159949','510500',
-        '159915','512500', '159968','515800','512990','512380','512160','512090',
-        '159995','512760','515050','159801','512480','512290','159992','512170',
-        '512010','159938','515000','515750','159807','515860','159987','515030',
-        '515700','159806','512880','512000','512800','512900','159993','159928',
-        '512690','515650','159996','510150','512660','512710','515210','512400',
-        '515220','159966','159905','159967','510880','515180','515680','515900',
-        '159976','515600','159978','511010','511260','159972','510900','159920',
-        '513050','513090','513500','518880','159934','159937','518800','159980'
-        ]
-    select_list = ['510050', '159995', '512090', '515050', '512290', '515000', 
-        '515700', '512800', '159928', '512660', '512400', '510880', '159976', 
-        '511010', '510900', '518880']
+def run(start, end, ETF_ls, future_ls, StochLen, SmoothingLen, weight, cycle):
+    # 参数
     summary_df = pd.DataFrame(index = [], 
         columns = ['StochLen1', 'StochLen2', 'SmoothingLen1', 'SmoothingLen2', 'weight', \
             '累计收益率', 'Sharpe', '年化收益', '盈亏比', '最大日收益率', '最大日亏损率', '最大回撤', 'MAR'])
-    future_list = ['IH', 'IF', 'IC', 'TF', "T"]
 
-    start = '2016.01.01'
-    end = '2016.02.01'
-
-    # 参数
-    # StochLen = [5, 9, 18, 25, 34, 46, 72, 89]
-    # SmoothingLen = [3, 8, 13, 18]
-    # weight = [0.2, 0.4, 0.6, 0.8]
-    StochLen = [5, 9]
-    SmoothingLen = [3, 8]
-    weight = [0.2, 0.4]
-    # args = {
-    #         'StochLen1' : 6,
-    #         'StochLen2' : 18,
-    #         'SmoothingLen1': 10,
-    #         'SmoothingLen2': 10,
-    #         'weight': 0.7,
-    #     }
-
-    c = ETF_KDJ_LongShort(select_list, future_list, start, end, 15, logger = logger)
-
+    c = ETF_KDJ_LongShort(ETF_ls, future_ls, start, end, cycle)
     logger.info(f"Load data {start}-{end} finished")
     for i in range(len(StochLen)-1):
         for j in range(i+1, len(StochLen)):
@@ -377,16 +330,17 @@ if __name__ == '__main__':
                         args['SmoothingLen2'] = l
                         args['weight'] = m
 
-                        logger.info(f"start Args:{','.join([str(i) for i  in args.values()])}")
+                        logger.info(f"start Args:{','.join([str(i) for i  in args.values()])} between {start}-{end}")
                         
                         start_time = time.time()
                         c.Backtest(**args)
-                        logger.info(f"Time used: {time.time() - start_time}s")
+                        logger.info(f"Time used: {time.time() - start_time}s for args:" +
+                            f"{','.join([str(i) for i  in args.values()])} between {start}-{end}")
 
                         # 导出数据
                         writer = pd.ExcelWriter(os.path.join(
                             output_path, 
-                            f"KDJ_Arg_{'_'.join([str(i) for i  in args.values()])}_{c.start}_{c.end}.xlsx"
+                            f"KDJ_Arg_{c.start}_{c.end}_{'_'.join([str(i) for i  in args.values()])}.xlsx"
                             ))
                         pd.DataFrame(args.items()).to_excel(writer, sheet_name = "参数表")
                         # c.close_df.to_excel(writer, sheet_name = "15分钟级收盘价")
@@ -420,5 +374,44 @@ if __name__ == '__main__':
 
                         summary_df.loc[len(summary_df)] = list(args.values()) + list(c.result.values[0])
 
-    summary_df.to_csv(os.path.join(output_path, f'summary_{start}_{end}.csv'), encoding='utf_8_sig')
+    summary_df.to_csv(os.path.join(output_path, f'summary_{start}_{end}.csv'), encoding='utf_8_sig', index = False)
+
+
+if __name__ == '__main__':
+    freeze_support() # prevent raising run-time error from running the frozen executable
+
+    whole_list = ['510300','510330','510050','159919','510310','159949','510500',
+        '159915','512500', '159968','515800','512990','512380','512160','512090',
+        '159995','512760','515050','159801','512480','512290','159992','512170',
+        '512010','159938','515000','515750','159807','515860','159987','515030',
+        '515700','159806','512880','512000','512800','512900','159993','159928',
+        '512690','515650','159996','510150','512660','512710','515210','512400',
+        '515220','159966','159905','159967','510880','515180','515680','515900',
+        '159976','515600','159978','511010','511260','159972','510900','159920',
+        '513050','513090','513500','518880','159934','159937','518800','159980'
+        ]
+    select_list = ['510050', '159995', '512090', '515050', '512290', '515000', 
+        '515700', '512800', '159928', '512660', '512400', '510880', '159976', 
+        '511010', '510900', '518880']
+    
+    future_list = ['IH', 'IF', 'IC', 'TF', "T"]
+
+    # 参数
+    StochLen = [5, 9, 18, 25, 34, 46, 72, 89]
+    SmoothingLen = [3, 8, 13, 18]
+    weight = [0.2, 0.4, 0.6, 0.8]
+
+    start_train = ['2016.01.01', '2017.01.01', '2018.01.01']
+    end_train = ['2018.01.01', '2019.01.01', '2020.01.01']
+    
+    pool = Pool()
+    results = []
+    for start, end in zip(start_train, end_train):
+        results.append(pool.apply_async(run, 
+            args = (start, end, select_list, future_list, StochLen, SmoothingLen, weight, 15)))
+    pool.close()
+    pool.join
+
+    for i in results:
+        i.get()
 
