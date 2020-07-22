@@ -3,8 +3,10 @@
 # @author: Brian Shan
 # @date: 2020.07.08
 # 注： 交易时间为9点30 - 11点30， 1点 - 3点
-# ToDo: 目前是从dolphindb_data里取一分钟的数据重新组合成15分钟
-#       原因是15分钟的数据目前有问题，等待技术部门更新
+# ToDo: 
+# 1. 目前是从dolphindb_data里取一分钟的数据重新组合成15分钟
+#    原因是15分钟的数据目前有问题，等待技术部门更新
+# 2. 如果参数组数较小可使用并行跑，不然会out of memory
 
 import os
 import csv
@@ -16,11 +18,16 @@ from matplotlib import pyplot as plt
 from typing import Set
 from typing import List
 import gc
+import shutil
+import glob
+import itertools
+from guppy import hpy
 
 
 from Dolphindb_Data import GetData
 from Generate_Min_Data import generate_any_minute_data
 from Constant import future_multiplier, margin_percent, margin_multiplier, output_path, log_path
+from Constant import output_path, log_path, select_ls, future_ls, whole_ls
 
 import time
 from multiprocessing import Pool, freeze_support
@@ -55,7 +62,7 @@ class ETF_KDJ_LongShort(object):
         self.money= 100_000_000
         self.get = GetData()
         self.close_df = None
-        self.lots = None
+        
 
         if logger is None:
             self.logger = logging.getLogger(f'ETF_KDJ_LongShort')
@@ -64,10 +71,10 @@ class ETF_KDJ_LongShort(object):
             ch.setLevel(logging.DEBUG)
             formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
             ch.setFormatter(formatter)
-            logger.addHandler(ch)
+            self.logger.addHandler(ch)
         else:
             self.logger = logger
-
+        self.get.clearcache()
         self.load_data()
         
 
@@ -88,9 +95,10 @@ class ETF_KDJ_LongShort(object):
         
         self.close_buy_df = self.close_df.copy() # close price for buying ETF and future
         self.close_sell_df = self.close_df.copy() # close price for selling ETF and future
+        self.switch_dict = {}
         for prod in self.future_sym:
             switch_df = self.get.Future_hist_Mswitch(prod, self.start, self.end)
-            
+            self.switch_dict[prod] = switch_df
             dateStart = self.start
             dateStart_buy = self.close_df.index[0]
             dateStart_sell = self.close_df.index[0]
@@ -244,23 +252,38 @@ class ETF_KDJ_LongShort(object):
         close_sell_mat = self.close_sell_df.fillna(0).values
         
         hand_mat = MoneyRatio0_mat * self.money // self.cost_perhand_mat
+        np.nan_to_num(hand_mat, copy = False)
         
-        pnl = np.nansum((close_sell_mat[1:, :] - close_buy_mat[:-1, :]) * hand_mat[:-1, :] * self.num_perhand_mat[:-1, :], axis = 1)
+        pnl = np.sum((close_sell_mat[1:, :] - close_buy_mat[:-1, :]) * hand_mat[:-1, :] * self.num_perhand_mat[:-1, :], axis = 1)
 
-        if self.lots is None:
-            self.lots = pd.DataFrame(
-                hand_mat,
-                index = self.close_buy_df.index, 
-                columns = self.close_buy_df.columns
-                )
+        self.lots = pd.DataFrame(
+            hand_mat,
+            index = self.close_buy_df.index, 
+            columns = self.close_buy_df.columns
+            )
         self.lots['PnL'] = np.concatenate(([0], pnl))
         self.lots['total asset'] = self.lots['PnL'].cumsum() + self.money
 
-        del MoneyRatio0_mat
-        del close_buy_mat
-        del close_sell_mat
-        del hand_mat
-        del pnl
+        trade_mat = np.concatenate((np.zeros((1,hand_mat.shape[1])), np.diff(hand_mat, axis = 0)))
+        trade_mat_pos = trade_mat.copy()
+        trade_mat_neg = trade_mat.copy()
+        trade_mat_pos[trade_mat_pos < 0] = 0
+        trade_mat_neg[trade_mat_neg > 0] = 0
+
+        turnover_mat = np.sum((trade_mat_pos * close_buy_mat + (-trade_mat_neg) * close_sell_mat) * self.num_perhand_mat, axis = 0)
+        self.summary = pd.DataFrame(columns = self.close_buy_df.columns, index = ['turnover', 'Max Hand', 'Median Hand', 'Avg Hand', 'Min Hand'])
+        self.summary.loc['turnover', :] = turnover_mat
+        # 计算换仓导致的交易额
+        for prod in self.future_sym:
+            switch_df = self.switch_dict[prod]
+            for row in switch_df.values:
+                preclose_main = row[6]
+                preclose_premain = row[7]
+                pre_tradingday = row[9]
+                hold = self.lots.loc[pre_tradingday + timedelta(hours=14, minutes = 45), prod]
+                self.summary.loc['turnover', prod] += abs(hold) * (preclose_premain + preclose_main) * future_multiplier[prod]
+
+        self.summary.iloc[1:, :] = self.lots[self.close_buy_df.columns].agg(['max', 'median', 'mean', 'min'], axis = 0).values.tolist()
                 
     def performance(self):
         """
@@ -277,8 +300,7 @@ class ETF_KDJ_LongShort(object):
         plt.ylabel('Yuan')
         plt.title(f"Total Asset Time Series Graph during {self.lots.index[0].strftime('%y%m%d')}-{self.lots.index[-1].strftime('%y%m%d')}")
         plt.savefig(os.path.join(outdir, 
-            f"total_asset_{self.lots.index[0].strftime('%y%m%d')}_{self.lots.index[-1].strftime('%y%m%d')}" + \
-                f"_{self.StochLen1}_{self.StochLen2}_{self.SmoothingLen1}_{self.SmoothingLen2}_{self.weight}.png"))
+            f"total_asset_{self.StochLen1}_{self.StochLen2}_{self.SmoothingLen1}_{self.SmoothingLen2}_{self.weight}_{self.start}_{self.end}.png"))
         plt.close()
         
         source = self.lots[['ret']].groupby(self.lots.index.date).sum()
@@ -289,7 +311,7 @@ class ETF_KDJ_LongShort(object):
         # 最大日亏损率
         daily_min = source['ret'].min()
         rety = (source['nav'][-1] - 1) * (252 / source.shape[0]) # 年化收益率
-        sharp = source['ret'].mean() / source['ret'].std() * np.sqrt(252)
+        sharp = rety / (source['ret'].std() * np.sqrt(252))
         MDD = max(1 - source['nav'] / source['nav'].cummax())
         if MDD != 0:
             MAR = rety / MDD
@@ -308,10 +330,55 @@ class ETF_KDJ_LongShort(object):
         self.source = source
         # self.nav_permonth = source['nav'].resample('1M').last() / source[
         #     'nav'].resample('1M').first() - 1
+        
+    # seems useless in backtesting
+    def clean_memory(self):
+        del self.Jvalue_s
+        del self.Jvalue_l
+        del self.indicator
+        del self.avg_indicator
+        del self.std_indicator
+        del self.indDn
+        del self.indUp
+        del self.ReIndicator
+        del self.MoneyRatio0
+        del self.lots
+        del self.source
+        del self.result 
+
+def select_params(nums):
+    df_ls = []
+    des = os.path.join(output_path, 'selected')
+    os.makedirs(des, exist_ok = True)
+    for subd, _, _ in os.walk(output_path):
+        if subd == output_path or subd == des:
+            continue
+        for f in os.listdir(subd):
+            if f[:7] == 'summary':
+                data = pd.read_csv(os.path.join(subd, f))
+                data = data[data['最大回撤'] < data['最大回撤'].quantile(0.25)].nlargest(nums, ['MAR', 'Sharpe'])
+                df_ls.append(data)
+                break
+        for row in data.values:
+            file_name = os.path.join(subd, f"*{int(row[0])}_{int(row[1])}_{int(row[2])}_{int(row[3])}_{row[4]}*")
+            for file in glob.glob(file_name):
+                shutil.copy(file, des)
+
+    df_total = pd.concat(df_ls)
+    res = df_total.groupby(['StochLen1', 'StochLen2', 'SmoothingLen1', 'SmoothingLen2', 'weight']).size().reset_index(name = 'counts')
+    res.sort_values('counts', ascending = False, inplace = True)
+    res = res[res['counts'] == 3]
+    for idx, row in res.iterrows():
+        if row[0] == row[1] and row[2] == row[3] and row[4] != 0.2:
+                res.drop(idx, inplace = True)
+    res.to_csv(os.path.join(output_path, 'para_summary.csv'), encoding='utf_8_sig', index = False)
+    return res 
+
+    
 
 
-def run(start: str, end: str, ETF_ls: list, future_ls:list, 
-            StochLen:list, SmoothingLen:list, weight:list, cycle:"int > 0"):
+def run(start: str, end: str, arg_mat:list, cycle:"int > 0" = 15, \
+            ETF_ls: list = select_ls, future_ls:list = future_ls, output_excel = False):
     """
     主程序
     """
@@ -344,86 +411,57 @@ def run(start: str, end: str, ETF_ls: list, future_ls:list,
         c = ETF_KDJ_LongShort(ETF_ls, future_ls, start, end, cycle, logger)
         logger.info(f"Load data {start}-{end} finished")
 
-        for i in range(len(StochLen)-1):
-            for j in range(i+1, len(StochLen)):
-                for k in SmoothingLen:
-                    for l in SmoothingLen:
-                        for m in weight:
-                            try:
-                                args  = {}
-                                args['StochLen1'] = StochLen[i]
-                                args['StochLen2'] = StochLen[j]
-                                args['SmoothingLen1'] = k
-                                args['SmoothingLen2'] = l
-                                args['weight'] = m
+        for row in arg_mat:
+            if row[1] < row[0]:
+                continue
+            try:
+                args  = {}
+                args['StochLen1'] = int(row[0])
+                args['StochLen2'] = int(row[1])
+                args['SmoothingLen1'] = int(row[2])
+                args['SmoothingLen2'] = int(row[3])
+                args['weight'] = row[4]
 
-                                logger.info(f"start Args:{','.join([str(i) for i  in args.values()])} between {start}-{end}")
-                                
-                                start_time = time.time()
-                                c.Backtest(**args)
-                                logger.info(f"Time used: {time.time() - start_time}s for args: {','.join([str(i) for i  in args.values()])} between {start}-{end}")
+                start_time = time.time()
+                c.Backtest(**args)
+                logger.info(f"Time used: {time.time() - start_time}s for args: {','.join([str(i) for i  in args.values()])} between {start}-{end}")
 
-                                # 导出数据
-                                writer_csv.writerow(list(args.values()) + list(c.result.values[0]))
+                # 导出数据
+                writer_csv.writerow(list(args.values()) + list(c.result.values[0]))
 
-                                with pd.ExcelWriter(os.path.join(
-                                    outdir,
-                                    f"KDJ_Arg_{start}_{end}_{'_'.join([str(i) for i  in args.values()])}.xlsx"
-                                    )) as writer_excel:
-                                    pd.DataFrame(args.items()).to_excel(writer_excel, sheet_name = "参数表")
-                                    # c.close_df.to_excel(writer_excel, sheet_name = "15分钟级收盘价")
-                                    # c.var0_s.to_excel(writer_excel, sheet_name = "短期var0")
-                                    # c.var1_s.to_excel(writer_excel, sheet_name = "短期var1")
-                                    # c.var2_s.to_excel(writer_excel, sheet_name = "短期var2")
-                                    # c.var3_s.to_excel(writer_excel, sheet_name = "短期var3")
-                                    # c.FastKCustom_s.to_excel(writer_excel, sheet_name = "短期FastKCustom")
-                                    # c.Kvalue_s.to_excel(writer_excel, sheet_name = "短期K值")
-                                    # c.Dvalue_s.to_excel(writer_excel, sheet_name = "短期D值")
-                                    # c.Jvalue_s.to_excel(writer_excel, sheet_name = "短期J值")
-                                    # c.var0_l.to_excel(writer_excel, sheet_name = "长期var0")
-                                    # c.var1_l.to_excel(writer_excel, sheet_name = "长期var1")
-                                    # c.var2_l.to_excel(writer_excel, sheet_name = "长期var2")
-                                    # c.var3_l.to_excel(writer_excel, sheet_name = "长期var3")
-                                    # c.FastKCustom_l.to_excel(writer_excel, sheet_name = "长期FastKCustom")
-                                    # c.Kvalue_l.to_excel(writer_excel, sheet_name = "长期K值")
-                                    # c.Dvalue_l.to_excel(writer_excel, sheet_name = "长期D值")
-                                    # c.Jvalue_l.to_excel(writer_excel, sheet_name = "长期J值")
-                                    #c.close_buy_df.to_excel(writer_excel, sheet_name = "买入价")
-                                    #c.close_sell_df.to_excel(writer_excel, sheet_name = "卖出价")
-                                    # c.indicator.to_excel(writer_excel, sheet_name = "Indicator")
-                                    # c.avg_indicator.to_excel(writer_excel, sheet_name = "AvgIndicator")
-                                    # c.ReIndicator.to_excel(writer_excel, sheet_name = "ReIndicator")
-                                    c.MoneyRatio0.to_excel(writer_excel, sheet_name = 'MoneyRatio0')
-                                    c.lots.to_excel(writer_excel, sheet_name = '仓位')
-                                    c.source.to_excel(writer_excel, sheet_name = '利润表')
-                                    c.result.to_excel(writer_excel, sheet_name = '总结')
-                                    # c.nav_permonth.to_excel(writer_excel, sheet_name = '月度净值')
-
-                            except Exception as e:
-                                logger.error(f"Error: {e} at args: {','.join([str(i) for i  in args.values()])} between {start}-{end}")
-                                return
+                if output_excel:
+                    with pd.ExcelWriter(os.path.join(
+                        outdir,
+                        f"KDJ_Arg_{'_'.join([str(i) for i  in args.values()])}_{start}_{end}.xlsx"
+                        )) as writer_excel:
+                        pd.DataFrame(args.items()).to_excel(writer_excel, sheet_name = "参数表")
+                        #c.close_buy_df.to_excel(writer_excel, sheet_name = "买入价")
+                        #c.close_sell_df.to_excel(writer_excel, sheet_name = "卖出价")
+                        # c.indicator.to_excel(writer_excel, sheet_name = "Indicator")
+                        # c.avg_indicator.to_excel(writer_excel, sheet_name = "AvgIndicator")
+                        # c.ReIndicator.to_excel(writer_excel, sheet_name = "ReIndicator")
+                        c.MoneyRatio0.to_excel(writer_excel, sheet_name = 'MoneyRatio0')
+                        c.lots.to_excel(writer_excel, sheet_name = '仓位')
+                        c.source.to_excel(writer_excel, sheet_name = '利润表')
+                        c.result.to_excel(writer_excel, sheet_name = '指标')
+                        # c.nav_permonth.to_excel(writer_excel, sheet_name = '月度净值')
+                        c.summary.to_excel(writer_excel, sheet_name = '总结')
+                
+                
                 # explicitly free memory
+                c.clean_memory()
                 gc.collect()
+
+            except Exception as e:
+                logger.error(f"Error: {e} at args: {','.join([str(i) for i  in args.values()])} between {start}-{end}")
+                return
+                
+            h = hpy()
+            logger.debug(h.heap())
 
 
 if __name__ == '__main__':
     freeze_support() # prevent raising run-time error from running the frozen executable
-
-    whole_list = ['510300','510330','510050','159919','510310','159949','510500',
-        '159915','512500', '159968','515800','512990','512380','512160','512090',
-        '159995','512760','515050','159801','512480','512290','159992','512170',
-        '512010','159938','515000','515750','159807','515860','159987','515030',
-        '515700','159806','512880','512000','512800','512900','159993','159928',
-        '512690','515650','159996','510150','512660','512710','515210','512400',
-        '515220','159966','159905','159967','510880','515180','515680','515900',
-        '159976','515600','159978','511010','511260','159972','510900','159920',
-        '513050','513090','513500','518880','159934','159937','518800','159980'
-        ]
-    select_list = ['510050', '159995', '512090', '515050', '512290', '515000', 
-        '515700', '512800', '159928', '512660', '512400', '510880', '159976', 
-        '511010', '510900', '518880']
-    
-    future_list = ['IH', 'IF', 'IC', 'TF', "T"]
 
     # 参数
     StochLen = [5, 9, 18, 25, 34, 46, 72, 89]
@@ -433,15 +471,43 @@ if __name__ == '__main__':
     # SmoothingLen = [3, 8]
     # weight = [0.2]
 
+    arg_mat = list(itertools.product(StochLen, StochLen,SmoothingLen, SmoothingLen, weight))
+
     start_train = ['2016.01.01', '2017.01.01', '2018.01.01']
     # end_train = ['2016.02.01', '2017.02.01', '2018.02.01']
     end_train = ['2018.01.01', '2019.01.01', '2020.01.01']
     
-    pool = Pool(maxtasksperchild = 1)
-    results = []
-    for start, end in zip(start_train, end_train):
-        results.append(pool.apply_async(run, 
-            args = (start, end, select_list, future_list, StochLen, SmoothingLen, weight, 15)))
-    pool.close()
-    pool.join()
-  
+
+    # 请自行去除comment块来运行
+    #-------------------------------------------------------------------------------------------------------
+    # pool = Pool(maxtasksperchild = 1)
+    
+    # for start, end in zip(start_train, end_train):
+    #     pool.apply_async(run, 
+    #         args = (start, end, select_list, future_list, StochLen, SmoothingLen, weight, 15, False))
+    # pool.close()
+    # pool.join()
+    # run('2016.01.01', '2016.02.01', arg_mat, 15, select_ls, future_ls, False)
+
+    #---------------------------------------生成train里共同的优质参数组-------------------------------------------
+
+    # select_params(150)
+
+    # ---------------------------------------test------------------------------------------------------------------
+    # 
+    # params = pd.read_csv(os.path.join(output_path, 'para_summary.csv'))
+    # run('2020.01.01', '2020.07.01', params.values, 15, select_ls, future_ls, False)
+
+    # ---------------------------------------删去test集里不好的参数组-------------------------------------------------------
+    # 
+    # test_result = pd.read_csv(os.path.join(output_path, '2020.01.01_2020.07.01', 'summary_2020.01.01_2020.07.01.csv'))
+    # final_params = test_result[test_result['最大回撤'] < 0.1].iloc[:,:5]
+    # print(f"Reserve Ratio: {len(final_params)}/{len(test_result)} = {len(final_params)/len(test_result)}")
+    # final_params.to_csv(os.path.join(output_path, 'final_params.csv'), index = False)
+
+    # ---------------------------------------生成全周期报告--------------------------------------------------------------
+    # 
+    params = pd.read_csv(os.path.join(output_path, 'final_params.csv'))
+    run('2016.01.01', '2016.02.01', params.values, 15, select_ls, future_ls, True)
+
+    
