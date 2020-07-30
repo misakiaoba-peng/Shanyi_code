@@ -4,8 +4,8 @@
 # @date: 2020.07.08
 # 注： 交易时间为9点30 - 11点30， 1点 - 3点
 # ToDo: 
-# 1. 目前是从dolphindb_data里取一分钟的数据重新组合成15分钟
-#    原因是15分钟的数据目前有问题，等待技术部门更新
+# 1. 目前是从dolphindb_data里取一分钟的数据重新组合成其他分钟
+#    原因是其他分钟的数据目前有问题，等待技术部门更新（也许他们不更新了）
 # 2. 如果参数组数较小可使用并行跑，不然会out of memory
 
 import os
@@ -54,7 +54,8 @@ class ETF_KDJ_LongShort(object):
         self.future_sym = future_sym
         self.num_ETF = len(ETF_sym)
         self.num_future = len(future_sym)
-        self.start = start
+        self.start = (pd.to_datetime(start) + timedelta(days = -180)).strftime("%Y.%m.%d") # 预读4个月数据
+        self.start_backtest = pd.to_datetime(start)
         self.end = end
         self.cycle: int = cycle
 
@@ -77,20 +78,25 @@ class ETF_KDJ_LongShort(object):
         
 
     def load_data(self):
-        cur_dir = os.path.dirname(os.path.realpath(__file__))
-        if f"data_{self.cycle}min.csv" in os.listdir(cur_dir):
-            # read from csv from tinysoft
-            data = pd.read_csv(os.path.dirname(os.path.realpath(__file__)) + "\\data_15min.csv", index_col = 0)
-            data.index = pd.to_datetime(data.index)
-            data.columns = [str(i) for i in data.columns]
-            data = data.loc[(pd.to_datetime(self.start) <= data.index) & (data.index <= pd.to_datetime(self.end) + timedelta(days = 1))]
-            self.close_df = data[self.ETF_sym]
-        else:
-            # read from dolphin_db
-            for sym in self.ETF_sym:
-                data=self.get.Stock_candle(sym, self.start, self.end, 1) 
-                if len(data) > 0:
-                    self.etf_handler(generate_any_minute_data(data, self.cycle))
+        # cur_dir = os.path.dirname(os.path.realpath(__file__))
+        # if f"data_{self.cycle}min.csv" in os.listdir(cur_dir):
+        #     # read from csv from tinysoft
+        #     data = pd.read_csv(cur_dir + "\\data_15min.csv", index_col = 0)
+        #     data.index = pd.to_datetime(data.index)
+        #     data.columns = [str(i) for i in data.columns]
+        #     data = data.loc[(pd.to_datetime(self.start) <= data.index) & (data.index <= pd.to_datetime(self.end) + timedelta(days = 1))]
+        #     self.close_df = data[self.ETF_sym]
+        # else:
+        # read from dolphin_db
+        for sym in self.ETF_sym:
+            data=self.get.Stock_candle(sym, self.start, self.end, 1)
+            if len(data) > 0:
+                self.etf_handler(generate_any_minute_data(data, self.cycle))
+            else:
+                if self.close_df is None:
+                    self.close_df = pd.DataFrame(columns = [sym])
+                else:
+                    self.close_df[sym] = np.nan
         
         self.close_buy_df = self.close_df.copy() # close price for buying ETF and future
         self.close_sell_df = self.close_df.copy() # close price for selling ETF and future
@@ -99,8 +105,8 @@ class ETF_KDJ_LongShort(object):
             switch_df = self.get.Future_hist_Mswitch(prod, self.start, self.end)
             self.switch_dict[prod] = switch_df
             dateStart = self.start
-            dateStart_buy = self.close_df.index[0]
-            dateStart_sell = self.close_df.index[0]
+            dateStart_buy = None
+            dateStart_sell = None
             if len(switch_df) > 0: # 主力合约换过
                 for row in switch_df.values:
                     premain = row[4]
@@ -131,26 +137,28 @@ class ETF_KDJ_LongShort(object):
         self.close_sell_df.fillna(method = 'ffill', inplace = True)
 
         # basic matrix of cost and num per hand
-        self.cost_perhand_mat = np.full(self.close_buy_df.shape, 100)
+        temp_df = self.close_buy_df[self.close_buy_df.index >= self.start_backtest]
+        self.cost_perhand_mat = np.full(temp_df.shape, 100)
         if self.num_future > 0:
             self.cost_perhand_mat[:, -self.num_future:] = np.array([margin_percent[prod] * margin_multiplier * future_multiplier[prod] for prod in self.future_sym])
-        self.cost_perhand_mat = self.cost_perhand_mat * self.close_buy_df.fillna(0).values
+        self.cost_perhand_mat = self.cost_perhand_mat * temp_df.fillna(0).values
         
-        self.num_perhand_mat = np.full(self.close_buy_df.shape, 100)
+        self.num_perhand_mat = np.full(temp_df.shape, 100)
         if self.num_future > 0:
             self.num_perhand_mat[:, -self.num_future:] = np.array([future_multiplier[prod] for prod in self.future_sym])
 
         # commission matrix
-        self.commission_pertrade = np.zeros(self.close_buy_df.shape)
+        self.commission_pertrade = np.zeros(temp_df.shape)
         for i in range(self.num_ETF):
             self.commission_pertrade[:, i] = ETF_dict[self.ETF_sym[i]][1] * commission_multiplier
-        
         for i in range(self.num_future):
             if self.future_sym[i] in ('IF', 'IC', 'IH'):
                 self.commission_pertrade[:, self.num_ETF+i] = commission_index * commission_multiplier
                 
-        self.commission_perhand = np.zeros(self.close_buy_df.shape)
-        self.commission_perhand[:, -2:] = commission_bond * commission_multiplier
+        self.commission_perhand = np.zeros(temp_df.shape)
+        for i in range(self.num_future):
+            if self.future_sym[i] in ('TF', 'T'):
+                self.commission_perhand[:, self.num_ETF+i] = commission_bond * commission_multiplier
 
     def etf_handler(self, data: pd.DataFrame):
         """
@@ -187,15 +195,28 @@ class ETF_KDJ_LongShort(object):
                 (g[0] == 11 and g[1] <= 30) or \
                 (g[0] == 15 and g[1] == 0)):
                     data.drop(g_df.index, inplace = True)
-        # attach data to the close price for buy and the close price for sell 
-        self.close_buy_df.loc[dateStart_buy:data.index[-2], prod] = data.loc[dateStart_buy:data.index[-2], prod]
-        self.close_sell_df.loc[dateStart_sell:data.index[-1], prod] = data.loc[dateStart_sell:data.index[-1], prod]
 
-        dateStart_buy = data.index[-1]
-        idx = self.close_sell_df.index.get_loc(data.index[-1])
-        if idx + 1 < len(self.close_sell_df):
-            idx += 1
-        dateStart_sell = self.close_sell_df.index[idx]
+        # attach data to the close price for buy and the close price for sell 
+        if self.close_buy_df.empty or prod == self.close_buy_df.columns[0]: # future only
+            if dateStart_buy != None:
+                self.close_buy_df.at[dateStart_buy, prod] = data.at[dateStart_buy, prod]
+            if dateStart_sell != None:
+                dateStart_sell = data.index[data.index.get_loc(dateStart_sell)+1]
+            # self.close_buy_df = pd.concat([self.close_buy_df, data.loc[dateStart_sell:data.index[-2], [prod]]])
+            # self.close_sell_df = pd.concat([self.close_sell_df, data.loc[dateStart_sell:data.index[-1], [prod]]])
+            self.close_buy_df = self.close_buy_df.append(data.loc[dateStart_sell:data.index[-2], [prod]])
+            self.close_sell_df = self.close_sell_df.append(data.loc[dateStart_sell:data.index[-1], [prod]])
+            self.close_buy_df.at[data.index[-1], prod] = np.nan
+            dateStart_buy, dateStart_sell = data.index[-1], data.index[-1]
+        else:
+            self.close_buy_df.loc[dateStart_buy:data.index[-2], prod] = data.loc[dateStart_buy:data.index[-2], prod]
+            self.close_sell_df.loc[dateStart_sell:data.index[-1], prod] = data.loc[dateStart_sell:data.index[-1], prod]
+
+            dateStart_buy = data.index[-1]
+            idx = self.close_sell_df.index.get_loc(data.index[-1])
+            if idx + 1 < len(self.close_sell_df):
+                idx += 1
+            dateStart_sell = self.close_sell_df.index[idx]
         return dateStart_buy, dateStart_sell
 
     def Backtest(self, **args):
@@ -222,6 +243,7 @@ class ETF_KDJ_LongShort(object):
         self.SmoothingLen1 = args['SmoothingLen1']
         self.SmoothingLen2 = args['SmoothingLen2']
         self.weight = args['weight']
+        self.risk_exposure = args['risk_exposure']
         
         def KDJ(data, StochLen, SmoothingLen):
             var0 = data.rolling(StochLen).min()
@@ -243,6 +265,7 @@ class ETF_KDJ_LongShort(object):
         _, _, self.Jvalue_s = KDJ(self.close_buy_df, self.StochLen1, self.SmoothingLen1)
         _, _, self.Jvalue_l = KDJ(self.close_buy_df, self.StochLen2, self.SmoothingLen2)
         self.indicator = self.weight * self.Jvalue_s + (1-self.weight) * self.Jvalue_l + 200 # 强弱指标
+        self.indicator = self.indicator[self.indicator.index >= self.start_backtest]
         self.avg_indicator = self.indicator.mean(axis = 1) # 各品种强弱指标均值
         self.std_indicator = self.indicator.std(axis = 1, ddof = 0) # 各品种强弱指标标准差
         self.indUp = self.avg_indicator + 1.5 * self.std_indicator # 指标上轨
@@ -253,17 +276,30 @@ class ETF_KDJ_LongShort(object):
         self.ReIndicator[self.ReIndicator[self.ETF_sym] < 0] = 0 # 不空ETF
         # self.ReIndicator[self.future_sym] = 0 # 不做future
         self.MoneyRatio0 = self.ReIndicator.divide(self.ReIndicator.abs().sum(axis = 1), axis = 0)
+        # 修改投资比例
+        if self.num_ETF > 0 and self.risk_exposure != 0:
+            ETF_mat = self.MoneyRatio0[self.ETF_sym]
+            self.MoneyRatio0[self.ETF_sym] = ETF_mat / np.sum(ETF_mat, axis = 1)[:, None] * (1-self.risk_exposure)
+        if self.num_future > 0:
+            pos_ratio = self.risk_exposure/(1+2*self.risk_exposure)
+            neg_ratio = (1+self.risk_exposure)/(1+2*self.risk_exposure)
+            future_mat = self.MoneyRatio0[self.future_sym].values
+            future_mat_pos = future_mat * (future_mat > 0)
+            future_mat_neg = future_mat * (future_mat < 0)
+            self.MoneyRatio0[self.future_sym] = future_mat_pos / np.sum(future_mat_pos, axis = 1)[:, None] * pos_ratio + \
+                                                future_mat_neg / -np.sum(future_mat_neg, axis = 1)[:, None] * neg_ratio
         # 修改极值
-        self.MoneyRatio0[self.MoneyRatio0 > 0.1] = 0.1
-        self.MoneyRatio0[self.MoneyRatio0 < -0.1] = -0.1
+        if self.num_ETF > 0:
+            self.MoneyRatio0[self.MoneyRatio0 > 0.2] = 0.2
+            self.MoneyRatio0[self.MoneyRatio0 < -0.2] = -0.2
 
     def generate_lots(self):
         """
         生成每天的仓位
         """
         MoneyRatio0_mat = self.MoneyRatio0.fillna(0).values
-        close_buy_mat = self.close_buy_df.fillna(0).values
-        close_sell_mat = self.close_sell_df.fillna(0).values
+        close_buy_mat = self.close_buy_df[self.close_buy_df.index >= self.start_backtest].fillna(0).values
+        close_sell_mat = self.close_sell_df[self.close_sell_df.index >= self.start_backtest].fillna(0).values
         
         hand_mat = MoneyRatio0_mat * self.money // self.cost_perhand_mat
         np.nan_to_num(hand_mat, copy = False)
@@ -284,31 +320,32 @@ class ETF_KDJ_LongShort(object):
                 preclose_main = row[6]
                 preclose_premain = row[7]
                 pre_tradingday = row[9]
-                idx = self.close_buy_df.index.get_loc(pre_tradingday + timedelta(hours=14, minutes = 45))
-                hold = hand_mat[idx, self.num_ETF + i]
-                hold2 = hand_mat[idx + 1, self.num_ETF + i]
+                pre_time = pre_tradingday + timedelta(hours=15)
+                if pre_time not in self.MoneyRatio0.index:
+                    continue
+                idx = self.MoneyRatio0.index.get_loc(pre_time)
+                hold = hand_mat[idx - 1, self.num_ETF + i]
+                hold2 = hand_mat[idx, self.num_ETF + i]
                 if hold2 > hold: # 买
-                    trade_mat_pos[idx+1, self.num_ETF + i] += abs(hold) * 2
+                    trade_mat_pos[idx, self.num_ETF + i] += abs(hold) * 2
                 else: # 卖
-                    trade_mat_pos[idx+1, self.num_ETF + i] += abs(hold2) * 2
-                turnover_mat[idx + 1, self.num_ETF + i] += abs(hold) * (preclose_premain + preclose_main) * future_multiplier[prod]
+                    trade_mat_pos[idx, self.num_ETF + i] += abs(hold2) * 2
+                turnover_mat[idx, self.num_ETF + i] += abs(hold) * (preclose_premain + preclose_main) * future_multiplier[prod]
 
         commission_mat = turnover_mat * self.commission_pertrade + (trade_mat_pos - trade_mat_neg) * self.commission_perhand
 
         self.lots = pd.DataFrame(
             hand_mat,
-            index = self.close_buy_df.index, 
+            index = self.MoneyRatio0.index, 
             columns = [f"{i}-{ETF_dict[i][0]}" for i in self.ETF_sym] + self.future_sym
             )
         self.lots['commission'] = np.sum(commission_mat, axis = 1)
         self.lots['PnL'] = np.concatenate(([0], pnl)) - self.lots['commission'].values
         self.lots['total asset'] = self.lots['PnL'].cumsum() + self.money
 
-        self.summary = pd.DataFrame(columns = self.lots.columns[:self.close_buy_df.shape[1]], index = ['交易额', '最大手数', '手数中间值', '平均手数', '最小手数'])
+        self.summary = pd.DataFrame(columns = self.lots.columns[:self.MoneyRatio0.shape[1]], index = ['交易额', '最大手数', '手数中间值', '平均手数', '最小手数'])
         self.summary.loc['交易额', :] = np.sum(turnover_mat, axis = 0)
-        
-
-        self.summary.iloc[1:, :] = self.lots.iloc[:, :self.close_buy_df.shape[1]].agg(['max', 'median', 'mean', 'min'], axis = 0).values.tolist()
+        self.summary.iloc[1:, :] = self.lots.iloc[:, :self.MoneyRatio0.shape[1]].agg(['max', 'median', 'mean', 'min'], axis = 0).values.tolist()
                 
     def performance(self):
         """
@@ -316,7 +353,7 @@ class ETF_KDJ_LongShort(object):
         """
         self.lots['ret'] = self.lots['PnL'] / self.money
         
-        outdir = os.path.join(output_path, f"{self.start}_{self.end}")
+        outdir = os.path.join(output_path, f"{self.cycle}min", f"{self.start_backtest.strftime('%Y.%m.%d')}_{self.end}")
         if not os.path.exists(outdir):
             os.makedirs(outdir, exist_ok = True)
 
@@ -325,7 +362,8 @@ class ETF_KDJ_LongShort(object):
         plt.ylabel('Yuan')
         plt.title(f"Total Asset Time Series Graph during {self.lots.index[0].strftime('%y%m%d')}-{self.lots.index[-1].strftime('%y%m%d')}")
         plt.savefig(os.path.join(outdir, 
-            f"total_asset_{self.StochLen1}_{self.StochLen2}_{self.SmoothingLen1}_{self.SmoothingLen2}_{self.weight}_{self.start}_{self.end}.png"))
+            f"total_asset_{self.StochLen1}_{self.StochLen2}_{self.SmoothingLen1}_{self.SmoothingLen2}_{self.weight}" + \
+                f"_{self.risk_exposure}_{self.lots.index[0].strftime('%y%m%d')}_{self.lots.index[-1].strftime('%y%m%d')}.png"))
         plt.close()
 
         VictoryRatio = np.sum(self.lots['PnL'] > 0)/(np.sum(self.lots['PnL'] > 0) + np.sum(self.lots['PnL'] < 0)) # 胜率
@@ -377,52 +415,53 @@ class ETF_KDJ_LongShort(object):
         del self.result 
 
 def select_params(nums):
-    df_ls = []
-    des = os.path.join(output_path, 'selected')
-    os.makedirs(des, exist_ok = True)
-    for subd, _, _ in os.walk(output_path):
-        if subd == output_path or subd == des:
+    for d in os.listdir(output_path):
+        c_dir = os.path.join(output_path, d)
+        if not os.path.isdir(c_dir) or c_dir == output_path:
             continue
-        for f in os.listdir(subd):
-            if f[:7] == 'summary':
-                data = pd.read_csv(os.path.join(subd, f))
-                data = data[data['最大回撤'] < data['最大回撤'].quantile(0.25)].nlargest(nums, ['MAR', 'Sharpe'])
-                df_ls.append(data)
-                break
-        for row in data.values:
-            file_name = os.path.join(subd, f"*{int(row[0])}_{int(row[1])}_{int(row[2])}_{int(row[3])}_{row[4]}*")
-            for file in glob.glob(file_name):
-                shutil.copy(file, des)
+        df_ls = []
+        des = os.path.join(c_dir, 'selected')
+        os.makedirs(des, exist_ok = True)
+        for date_dir, _, _ in os.walk(c_dir):
+            if date_dir == c_dir or date_dir == des:
+                continue
+            for f in os.listdir(date_dir):
+                if f[:7] == 'summary':
+                    data = pd.read_csv(os.path.join(date_dir, f))
+                    data = data[data['最大回撤'] < data['最大回撤'].quantile(0.25)].nlargest(nums, ['MAR', 'Sharpe'])
+                    df_ls.append(data)
+                    break
+            for row in data.values:
+                file_name = os.path.join(date_dir, f"*{int(row[0])}_{int(row[1])}_{int(row[2])}_{int(row[3])}_{row[4]}*")
+                for file in glob.glob(file_name):
+                    shutil.copy(file, des)
 
-    df_total = pd.concat(df_ls)
-    res = df_total.groupby(['StochLen1', 'StochLen2', 'SmoothingLen1', 'SmoothingLen2', 'weight']).size().reset_index(name = 'counts')
-    res.sort_values('counts', ascending = False, inplace = True)
-    res = res[res['counts'] == 3]
-    for idx, row in res.iterrows():
-        if row[0] == row[1] and row[2] == row[3] and row[4] != 0.2:
-                res.drop(idx, inplace = True)
-    res.to_csv(os.path.join(output_path, 'para_summary.csv'), encoding='utf_8_sig', index = False)
-    return res 
+        df_total = pd.concat(df_ls)
+        res = df_total.groupby(['StochLen1', 'StochLen2', 'SmoothingLen1', 'SmoothingLen2', 'weight']).size().reset_index(name = 'counts')
+        res.sort_values('counts', ascending = False, inplace = True)
+        res = res[res['counts'] == 3]
+        res.to_csv(os.path.join(c_dir, 'para_summary.csv'), encoding='utf_8_sig', index = False)
 
-def run(start: str, end: str, arg_mat:list, cycle:"int > 0" = 15, \
-            ETF_ls: list = select_ls, future_ls:list = future_ls, output_excel = False):
+def run(start: str, end: str, arg_mat:list, cycle:"int > 0" = 15, ETF_ls: list = select_ls, \
+        future_ls:list = future_ls, output_excel = False):
     """
     主程序
     """
 
     # 生成输出的文件夹
-    outdir = os.path.join(output_path, f"{start}_{end}")
+    outdir = os.path.join(output_path, f"{cycle}min", f"{start}_{end}")
     if not os.path.exists(outdir):
         os.makedirs(outdir, exist_ok = True)
-    if not os.path.exists(log_path):
-    	os.makedirs(log_path, exist_ok = True)
+    self_log_path = os.path.join(log_path, f"{cycle}min")
+    if not os.path.exists(self_log_path):
+    	os.makedirs(self_log_path, exist_ok = True)
 
     # logging setup
-    logger = logging.getLogger(f'ETF_KDJ_LongShort_{start}_{end}')
+    logger = logging.getLogger(f'ETF_KDJ_LongShort_{start}_{end}_{cycle}')
     logger.setLevel(logging.DEBUG)
     ch = logging.StreamHandler()
     ch.setLevel(logging.DEBUG)
-    fh = logging.handlers.RotatingFileHandler(os.path.join(log_path, f'log_{start}_{end}.txt'), maxBytes=20480, backupCount=10)
+    fh = logging.handlers.RotatingFileHandler(os.path.join(self_log_path, f'log_{start}_{end}.txt'), maxBytes=20480, backupCount=10)
     fh.setLevel(logging.DEBUG)
     formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
     fh.setFormatter(formatter)
@@ -435,58 +474,58 @@ def run(start: str, end: str, arg_mat:list, cycle:"int > 0" = 15, \
 
     with open(os.path.join(outdir, f'summary_{start}_{end}.csv'), 'a', encoding='utf_8_sig', newline='') as csvfile:
         writer_csv = csv.writer(csvfile)
-        writer_csv.writerow(['StochLen1', 'StochLen2', 'SmoothingLen1', 'SmoothingLen2', 'weight', \
+        writer_csv.writerow(['StochLen1', 'StochLen2', 'SmoothingLen1', 'SmoothingLen2', 'weight', 'risk exposure', \
             '累计收益率', 'Sharpe', '年化收益', '胜率', '盈亏比', '最大日收益率', '最大日亏损率', '最大回撤', 'MAR', '累计手续费'])
 
-        for row in arg_mat:
-            if row[1] < row[0]:
-                continue
-            try:
-                args  = {}
-                args['StochLen1'] = int(row[0])
-                args['StochLen2'] = int(row[1])
-                args['SmoothingLen1'] = int(row[2])
-                args['SmoothingLen2'] = int(row[3])
-                args['weight'] = row[4]
+    for row in arg_mat:
+        if row[1] < row[0] or (row[0] == row[1] and row[2] == row[3] and row[4] != 0.2):
+            continue
+        try:
+            args  = {}
+            args['StochLen1'] = int(row[0])
+            args['StochLen2'] = int(row[1])
+            args['SmoothingLen1'] = int(row[2])
+            args['SmoothingLen2'] = int(row[3])
+            args['weight'] = row[4]
+            args['risk_exposure'] = row[5]
 
-                start_time = time.time()
-                c.Backtest(**args)
-                logger.info(f"Time used: {time.time() - start_time}s for args: {','.join([str(i) for i  in args.values()])} between {start}-{end}")
+            start_time = time.time()
+            c.Backtest(**args)
+            logger.info(f"Time used: {time.time() - start_time}s for args: {','.join([str(i) for i  in args.values()])} between {start}-{end}")
 
-                # 导出数据
-                writer_csv.writerow(list(args.values()) + list(c.result.values[0]))
+            # 导出数据
+            with open(os.path.join(outdir, f'summary_{start}_{end}.csv'), 'a', encoding='utf_8_sig', newline='') as csvfile:
+                csv.writer(csvfile).writerow(list(args.values()) + list(c.result.values[0]))
 
-                if output_excel:
-                    with pd.ExcelWriter(os.path.join(
+            if output_excel:
+                with pd.ExcelWriter(os.path.join(
                         outdir,
                         f"KDJ_Arg_{'_'.join([str(i) for i  in args.values()])}_{start}_{end}.xlsx"
                         )) as writer_excel:
-                        pd.DataFrame(args.items()).to_excel(writer_excel, sheet_name = "参数表")
-                        c.Jvalue_s.to_excel(writer_excel, sheet_name = '短期J值')
-                        c.Jvalue_l.to_excel(writer_excel, sheet_name = '长期J值')
-                        #c.close_buy_df.to_excel(writer_excel, sheet_name = "买入价")
-                        #c.close_sell_df.to_excel(writer_excel, sheet_name = "卖出价")
-                        c.indicator.to_excel(writer_excel, sheet_name = "Indicator")
-                        # c.avg_indicator.to_excel(writer_excel, sheet_name = "AvgIndicator")
-                        # c.ReIndicator.to_excel(writer_excel, sheet_name = "ReIndicator")
-                        c.MoneyRatio0.to_excel(writer_excel, sheet_name = 'MoneyRatio0')
-                        c.lots.to_excel(writer_excel, sheet_name = '仓位')
-                        c.source.to_excel(writer_excel, sheet_name = '利润表')
-                        c.result.to_excel(writer_excel, sheet_name = '指标')
-                        # c.nav_permonth.to_excel(writer_excel, sheet_name = '月度净值')
-                        c.summary.to_excel(writer_excel, sheet_name = '总结')
-                
-                
-                # explicitly free memory
-                c.clean_memory()
-                gc.collect()
+                    pd.DataFrame(args.items()).to_excel(writer_excel, sheet_name = "参数表")
+                    c.Jvalue_s.to_excel(writer_excel, sheet_name = '短期J值')
+                    c.Jvalue_l.to_excel(writer_excel, sheet_name = '长期J值')
+                    c.close_buy_df.to_excel(writer_excel, sheet_name = "买入价")
+                    c.close_sell_df.to_excel(writer_excel, sheet_name = "卖出价")
+                    c.indicator.to_excel(writer_excel, sheet_name = "Indicator")
+                    # c.avg_indicator.to_excel(writer_excel, sheet_name = "AvgIndicator")
+                    # c.ReIndicator.to_excel(writer_excel, sheet_name = "ReIndicator")
+                    c.MoneyRatio0.to_excel(writer_excel, sheet_name = 'MoneyRatio0')
+                    c.lots.to_excel(writer_excel, sheet_name = '仓位')
+                    c.source.to_excel(writer_excel, sheet_name = '利润表')
+                    c.result.to_excel(writer_excel, sheet_name = '指标')
+                    # c.nav_permonth.to_excel(writer_excel, sheet_name = '月度净值')
+                    c.summary.to_excel(writer_excel, sheet_name = '总结')
+            
+            # explicitly free memory
+            gc.collect()
 
-            except Exception as e:
-                logger.error(f"Error: {e} at args: {','.join([str(i) for i  in args.values()])} between {start}-{end}")
-                return
-                
-            h = hpy()
-            logger.debug(h.heap())
+        except Exception as e:
+            logger.error(f"Error: {e} at args: {','.join([str(i) for i  in args.values()])} between {start}-{end}")
+            return
+            
+        # h = hpy()
+        # logger.debug(h.heap())
 
 
 if __name__ == '__main__':
@@ -496,27 +535,38 @@ if __name__ == '__main__':
     StochLen = [5, 9, 18, 25, 34, 46, 72, 89]
     SmoothingLen = [3, 8, 13, 18]
     weight = [0.2, 0.4, 0.6, 0.8]
+    risk_exposure = [0, 0.2, 0.4, 0.6, 0.8, 1]
     # StochLen = [5, 9]
     # SmoothingLen = [3, 8]
     # weight = [0.2]
 
-    arg_mat = list(itertools.product(StochLen, StochLen,SmoothingLen, SmoothingLen, weight))
+    arg_mat = list(itertools.product(StochLen, StochLen,SmoothingLen, SmoothingLen, weight, risk_exposure))
 
     start_train = ['2016.01.01', '2017.01.01', '2018.01.01']
     # end_train = ['2016.02.01', '2017.02.01', '2018.02.01']
     end_train = ['2018.01.01', '2019.01.01', '2020.01.01']
+    cycle = [15, 30, 60, 120, 240]
+   
     
 
     # 请自行去除comment块来运行
-    #-------------------------------------------------------------------------------------------------------
-    # pool = Pool(maxtasksperchild = 1)
+    #----------------------------------------并行-----------------------------------------------------------------
+
+    # for c in cycle:
+    #     pool = Pool(maxtasksperchild = 1)
+    #     for start, end in zip(start_train, end_train):
+    #         pool.apply_async(run, args = (start, end, arg_mat, c, select_ls, [], False))
+    #     pool.close()
+    #     pool.join()
+    # ----------------------------------------串行-----------------------------------------------------------------
+
+    # for c in cycle:
+	# 	for start, end in zip(start_train, end_train):
+	# 		pool = Pool(maxtasksperchild = 1
+	# 		pool.apply_async(run, args = (start, end, arg_mat, c, select_ls, [], False))
+	# 		pool.close()
+	# 		pool.join()
     
-    # for start, end in zip(start_train, end_train):
-    #     pool.apply_async(run, 
-    #         args = (start, end, select_list, future_list, StochLen, SmoothingLen, weight, 15, False))
-    # pool.close()
-    # pool.join()
-    # run('2016.01.01', '2016.02.01', arg_mat, 15, select_ls, future_ls, False)
 
     #---------------------------------------生成train里共同的优质参数组-------------------------------------------
 
@@ -524,15 +574,20 @@ if __name__ == '__main__':
 
     # ---------------------------------------test------------------------------------------------------------------
     # 
-    # params = pd.read_csv(os.path.join(output_path, 'para_summary.csv'))
-    # run('2020.01.01', '2020.07.01', params.values, 15, select_ls, future_ls, False)
+    # for c in cycle:
+    #     params = pd.read_csv(os.path.join(output_path, f"{c}min", 'para_summary.csv'))
+    #     pool = Pool(maxtasksperchild = 1)
+    #     pool.apply_async(run, args = ('2020.01.01', '2020.07.01', params.values, c, select_ls, [], False))
+    #     pool.close()
+    #     pool.join()
 
     # ---------------------------------------删去test集里不好的参数组-------------------------------------------------------
     # 
-    # test_result = pd.read_csv(os.path.join(output_path, '2020.01.01_2020.07.01', 'summary_2020.01.01_2020.07.01.csv'))
-    # final_params = test_result[test_result['最大回撤'] < 0.1].iloc[:,:5]
-    # print(f"Reserve Ratio: {len(final_params)}/{len(test_result)} = {len(final_params)/len(test_result)}")
-    # final_params.to_csv(os.path.join(output_path, 'final_params.csv'), index = False)
+    # for c in cycle:
+    #     test_result = pd.read_csv(os.path.join(output_path, f"{c}min",'2020.01.01_2020.07.01', 'summary_2020.01.01_2020.07.01.csv'))
+    #     final_params = test_result[test_result['最大回撤'] < 0.1].iloc[:,:5]
+    #     print(f"Reserve Ratio: {len(final_params)}/{len(test_result)} = {len(final_params)/len(test_result)}")
+    #     final_params.to_csv(os.path.join(output_path, f"{c}min", 'final_params.csv'), index = False)
 
     # ---------------------------------------生成全周期报告--------------------------------------------------------------
     # 
@@ -540,6 +595,6 @@ if __name__ == '__main__':
     # run('2016.01.01', '2020.07.01', params.values, 15, select_ls, future_ls, True)
     # 
     
-    # ------------------------------------------------------------------------------------------------------------------
-    run('2016.01.01', '2016.07.01', [[9,89,13,8,0.8]], 15, select_ls, [], True)
+    # ---------------------------------------DEBUG----------------------------------------------------------------
+    run('2016.01.01', '2018.01.01', [[9,89,18,3,0.8, 0.5]], 15, [], future_ls, True)
     
