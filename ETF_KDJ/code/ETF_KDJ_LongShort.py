@@ -30,13 +30,13 @@ from Constant import output_path, log_path, select_ls, future_ls, whole_ls
 from Constant import ETF_dict, commission_index, commission_bond, commission_multiplier
 
 import time
-from multiprocessing import Pool, freeze_support, Lock
+from multiprocessing import Pool, freeze_support, Lock, get_logger,Queue
 import logging
-import logging.handlers
-
+from logging.handlers import QueueHandler, QueueListener
+ 
 class ETF_KDJ_LongShort(object):
 	def __init__(self, ETF_sym:List[str], future_sym: List[str], 
-				start:str, end:str, cycle:int = 1, logger = None):
+				start:str, end:str, cycle:int = 1):
 		"""
 		Constuctor: 
 
@@ -62,17 +62,6 @@ class ETF_KDJ_LongShort(object):
 		self.money= 100_000_000
 		self.get = GetData()
 		self.close_df = pd.DataFrame()
-		
-		if logger is None:
-			self.logger = logging.getLogger(f'ETF_KDJ_LongShort')
-			self.logger.setLevel(logging.DEBUG)
-			ch = logging.StreamHandler()
-			ch.setLevel(logging.DEBUG)
-			formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-			ch.setFormatter(formatter)
-			self.logger.addHandler(ch)
-		else:
-			self.logger = logger
 		self.get.clearcache()
 		self.load_data()
 		
@@ -142,7 +131,7 @@ class ETF_KDJ_LongShort(object):
 		for prod in self.future_sym:
 			idx_nan = np.where(self.close_sell_df[prod].isnull())[0]
 			if len(idx_nan) > 0 and len(idx_nan) != idx_nan[-1] + 1:
-				self.logger.warning(f"there are missing close price in future: {prod} between {self.start}-{self.end}")
+				logging.warning(f"there are missing close price in future: {prod} between {self.start}-{self.end}")
 		
 		# deal with missing data
 		self.close_buy_df.fillna(method = 'ffill', inplace = True)
@@ -193,7 +182,7 @@ class ETF_KDJ_LongShort(object):
 			self.close_df = self.close_df.join(data, how = "outer", sort = True)  
 		idx_nan = np.where(self.close_df[sym].isnull())[0]
 		if len(idx_nan) > 0 and len(idx_nan) != idx_nan[-1] + 1:
-			self.logger.warning(f"there are missing close price in stock: {sym} between {self.start}-{self.end}")
+			logging.warning(f"there are missing close price in stock: {sym} between {self.start}-{self.end}")
 
 	def future_handler(self, data: pd.DataFrame, dateStart_buy: datetime, dateStart_sell:datetime):
 		"""
@@ -465,13 +454,12 @@ def run_parameters(c, args, outdir, output_excel):
 	try:
 		c.Backtest(**args)
 	except Exception as e:
-		c.logger.error(f"Error: {e} at args: {','.join([str(i) for i  in args.values()])} between {start}-{end}")
+		logging.error(f"Error: {e} at args: {','.join([str(i) for i  in args.values()])} between {start}-{end}")
 		return
-	
+	logging.info(f"Time used: {time.time() - start_time:.3f}s for args: " + \
+					f"{','.join([str(i) for i  in args.values()])} between {start}-{end} using cycle {c.cycle}")
 	# 导出数据
 	lock.acquire()
-	c.logger.info(f"Time used: {time.time() - start_time}s for args: " + \
-					f"{','.join([str(i) for i  in args.values()])} between {start}-{end}")
 	with open(os.path.join(outdir, f'summary_{start}_{end}.csv'), 'a', encoding='utf_8_sig', newline='') as csvfile:
 		csv.writer(csvfile).writerow(list(args.values()) + list(c.result.values[0]))
 	lock.release()
@@ -496,10 +484,13 @@ def run_parameters(c, args, outdir, output_excel):
 			# c.nav_permonth.to_excel(writer_excel, sheet_name = '月度净值')
 			c.summary.to_excel(writer_excel, sheet_name = '总结')
 
-def init(l):
+def init(l, q):
 	global lock
 	lock = l
-
+	qh = QueueHandler(q)
+	logger = logging.getLogger()
+	logger.setLevel(logging.INFO)
+	logger.addHandler(qh)
 
 def run(start: str, end: str, arg_mat:list, cycle:"int > 0" = 15, ETF_ls: list = select_ls, \
 		future_ls:list = future_ls, output_excel = False):
@@ -511,25 +502,28 @@ def run(start: str, end: str, arg_mat:list, cycle:"int > 0" = 15, ETF_ls: list =
 	outdir = os.path.join(output_path, f"{cycle}min", f"{start}_{end}")
 	if not os.path.exists(outdir):
 		os.makedirs(outdir, exist_ok = True)
-	self_log_path = os.path.join(log_path, f"{cycle}min")
-	if not os.path.exists(self_log_path):
-		os.makedirs(self_log_path, exist_ok = True)
+	
+	if not os.path.exists(log_path):
+		os.makedirs(log_path, exist_ok = True)
 
 	# logging setup
-	logger = logging.getLogger(f'ETF_KDJ_LongShort_{start}_{end}_{cycle}')
-	logger.setLevel(logging.DEBUG)
+	q = Queue()
+	logger = logging.getLogger()
+	logger.setLevel(logging.INFO)
 	ch = logging.StreamHandler()
-	ch.setLevel(logging.DEBUG)
+	ch.setLevel(logging.INFO)
 	fh = logging.handlers.RotatingFileHandler(
-			os.path.join(self_log_path, f'log_{start}_{end}.txt'), maxBytes=20480, backupCount=10)
-	fh.setLevel(logging.DEBUG)
+			os.path.join(log_path, f'log.txt'), maxBytes=20480, backupCount=10)
+	fh.setLevel(logging.INFO)
 	formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
 	fh.setFormatter(formatter)
 	ch.setFormatter(formatter)
+	ql = QueueListener(q, fh, ch)
+	ql.start()
 	logger.addHandler(fh)
 	logger.addHandler(ch)
 
-	c = ETF_KDJ_LongShort(ETF_ls, future_ls, start, end, cycle, logger)
+	c = ETF_KDJ_LongShort(ETF_ls, future_ls, start, end, cycle)
 	logger.info(f"Load data {start}-{end} finished")
 
 	with open(os.path.join(outdir, f'summary_{start}_{end}.csv'), 'a', encoding='utf_8_sig', newline='') as csvfile:
@@ -538,7 +532,7 @@ def run(start: str, end: str, arg_mat:list, cycle:"int > 0" = 15, ETF_ls: list =
 			'累计收益率', 'Sharpe', '年化收益', '胜率', '盈亏比', '最大日收益率', '最大日亏损率', '最大回撤', 'MAR', '累计手续费'])
 
 	l = Lock()
-	pool = Pool(initializer  = init, initargs = (l,))
+	pool = Pool(initializer  = init, initargs = (l, q))
 	for row in arg_mat:
 		if row[1] < row[0] or (row[0] == row[1] and row[2] == row[3] and row[4] != 0.2):
 			continue
@@ -553,6 +547,7 @@ def run(start: str, end: str, arg_mat:list, cycle:"int > 0" = 15, ETF_ls: list =
 			pool.apply_async(run_parameters, args = (c, args, outdir, output_excel))
 	pool.close()
 	pool.join()
+	ql.stop()
 
 if __name__ == '__main__':
 	freeze_support() # prevent raising run-time error from running the frozen executable
@@ -561,22 +556,27 @@ if __name__ == '__main__':
 	StochLen = [5, 9, 18, 25, 34, 46, 72, 89]
 	SmoothingLen = [3, 8, 13, 18]
 	weight = [0.2, 0.4, 0.6, 0.8]
-	risk_exposure = [0]
-	# risk_exposure = [0, 0.2, 0.4, 0.6, 0.8, 1]
+	# risk_exposure = [0]
+	risk_exposure = [0, 0.2, 0.4, 0.6, 0.8, 1]
 
 	arg_mat = list(itertools.product(StochLen, StochLen,SmoothingLen, SmoothingLen, weight, risk_exposure))
 
 	start_train = ['2016.01.01', '2017.01.01', '2018.01.01']
-	# end_train = ['2016.02.01', '2017.02.01', '2018.02.01']
-	end_train = ['2018.01.01', '2019.01.01', '2020.01.01']
+	end_train = ['2016.02.01', '2017.02.01', '2018.02.01']
+	# end_train = ['2018.01.01', '2019.01.01', '2020.01.01']
 	cycle = [15, 30, 60, 120, 240]
 
 	
 	# ---------------------------------------跑Train的参数------------------------------------------------------------------
+	
+	# for c in cycle:
+	# 	for start, end in zip(start_train, end_train):
+	# 		run(start, end, arg_mat, c, select_ls, [], False)
 
+	
 	for c in cycle:
 		for start, end in zip(start_train, end_train):
-			run(start, end, arg_mat, c, select_ls, [], False)
+			run(start, end, arg_mat, c, [], future_ls, False)
 
 	#---------------------------------------生成train里共同的优质参数组-------------------------------------------
 
