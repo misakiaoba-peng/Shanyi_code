@@ -75,6 +75,7 @@ class ETF_KDJ_LongShort(object):
 		#     data = data.loc[(pd.to_datetime(self.start) <= data.index) & (data.index <= pd.to_datetime(self.end) + timedelta(days = 1))]
 		#     self.close_df = data[self.ETF_sym]
 		# else:
+
 		# read from dolphin_db
 		for sym in self.ETF_sym:
 			data=self.get.Stock_candle(sym, self.start, self.end, 1)
@@ -276,7 +277,7 @@ class ETF_KDJ_LongShort(object):
 		self.indicator.mask(self.indicator.lt(self.indDn, axis = 0), self.indDn, axis = 0, inplace = True)
 		self.ReIndicator = self.indicator.divide(self.avg_indicator, axis = 0) - 1
 		self.ReIndicator[self.ReIndicator[self.ETF_sym] < 0] = 0 # 不空ETF
-		# self.ReIndicator[self.future_sym] = 0 # 不做future
+		# self.ReIndicator[self.future_sym] = 0 # 有future但不做future
 		self.MoneyRatio0 = self.ReIndicator.divide(self.ReIndicator.abs().sum(axis = 1), axis = 0)
 		# # 修改投资比例
 		# if self.num_ETF > 0 and self.risk_exposure != 0:
@@ -596,7 +597,7 @@ if __name__ == '__main__':
 	# 
 	# for c in cycle:
 	#     test_result = pd.read_csv(os.path.join(output_path, f"{c}min",'2020.01.01_2020.07.01', 'summary_2020.01.01_2020.07.01.csv'))
-	#     final_params = test_result[test_result['MAR'] > 2].iloc[:,:6]
+	#     final_params = test_result[test_result['MAR'] > 2].iloc[:,:5]
 	#     if len(test_result) > 0:
 	# 			print(f"Reserve Ratio: {len(final_params)}/{len(test_result)} = {len(final_params)/len(test_result)}")
 	#     final_params.to_csv(os.path.join(output_path, f"{c}min", 'final_params.csv'), index = False)
