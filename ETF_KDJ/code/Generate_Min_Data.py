@@ -4,6 +4,7 @@
 # @date: 2020.07.10
 
 import pandas as pd
+import numpy as np
 from datetime import time, date, datetime
 
 def generate_any_minute_data(data: pd.DataFrame, cycle:'int > 0') -> pd.DataFrame:
@@ -25,7 +26,8 @@ def generate_any_minute_data(data: pd.DataFrame, cycle:'int > 0') -> pd.DataFram
         return res
     template_index = generate_time_per_date(trading_day[0]).union_many([generate_time_per_date(i) for i in trading_day[1:]])
     res = pd.DataFrame(index = template_index).join(data.set_index('date'), how = 'left')
-    res = res[['open', 'high', 'low', 'close']].fillna(method = 'ffill').rename_axis('date').reset_index(drop = False)
+    res = res[['open', 'high', 'low', 'close']].replace(to_replace = [0, np.nan], method = 'ffill')
+    res = res.rename_axis('date').reset_index(drop = False)
     res = res.groupby(res.index // cycle).agg({
                 'date': 'last',
                 'open': 'first',

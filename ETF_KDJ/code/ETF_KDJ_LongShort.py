@@ -49,7 +49,6 @@ class ETF_KDJ_LongShort(object):
 			circle: int,  策略所需要的分钟数
 			logger: logger class
 		"""
-		self.count: int = 0
 		self.ETF_sym = ETF_sym
 		self.future_sym = future_sym
 		self.num_ETF = len(ETF_sym)
@@ -246,7 +245,7 @@ class ETF_KDJ_LongShort(object):
 		self.SmoothingLen1 = args['SmoothingLen1']
 		self.SmoothingLen2 = args['SmoothingLen2']
 		self.weight = args['weight']
-		self.risk_exposure = args['risk_exposure']
+		# self.risk_exposure = args['risk_exposure']
 		
 		def KDJ(data, StochLen, SmoothingLen):
 			var0 = data.rolling(StochLen).min()
@@ -279,18 +278,18 @@ class ETF_KDJ_LongShort(object):
 		self.ReIndicator[self.ReIndicator[self.ETF_sym] < 0] = 0 # 不空ETF
 		# self.ReIndicator[self.future_sym] = 0 # 不做future
 		self.MoneyRatio0 = self.ReIndicator.divide(self.ReIndicator.abs().sum(axis = 1), axis = 0)
-		# 修改投资比例
-		if self.num_ETF > 0 and self.risk_exposure != 0:
-			ETF_mat = self.MoneyRatio0[self.ETF_sym]
-			self.MoneyRatio0[self.ETF_sym] = ETF_mat / np.sum(ETF_mat, axis = 1)[:, None] * (1-self.risk_exposure)
-		if self.num_future > 0:
-			pos_ratio = self.risk_exposure/(1+2*self.risk_exposure)
-			neg_ratio = (1+self.risk_exposure)/(1+2*self.risk_exposure)
-			future_mat = self.MoneyRatio0[self.future_sym].values
-			future_mat_pos = future_mat * (future_mat > 0)
-			future_mat_neg = future_mat * (future_mat < 0)
-			self.MoneyRatio0[self.future_sym] = future_mat_pos / np.sum(future_mat_pos, axis = 1, keepdims=True) * pos_ratio + \
-												future_mat_neg / -np.sum(future_mat_neg, axis = 1, keepdims=True)* neg_ratio
+		# # 修改投资比例
+		# if self.num_ETF > 0 and self.risk_exposure != 0:
+		# 	ETF_mat = self.MoneyRatio0[self.ETF_sym]
+		# 	self.MoneyRatio0[self.ETF_sym] = ETF_mat / np.sum(ETF_mat, axis = 1)[:, None] * (1-self.risk_exposure)
+		# if self.num_future > 0:
+		# 	pos_ratio = self.risk_exposure/(1+2*self.risk_exposure)
+		# 	neg_ratio = (1+self.risk_exposure)/(1+2*self.risk_exposure)
+		# 	future_mat = self.MoneyRatio0[self.future_sym].values
+		# 	future_mat_pos = future_mat * (future_mat > 0)
+		# 	future_mat_neg = future_mat * (future_mat < 0)
+		# 	self.MoneyRatio0[self.future_sym] = future_mat_pos / np.sum(future_mat_pos, axis = 1, keepdims=True) * pos_ratio + \
+		# 										future_mat_neg / -np.sum(future_mat_neg, axis = 1, keepdims=True)* neg_ratio
 		# 修改极值
 		if self.num_ETF > 0:
 			self.MoneyRatio0[self.MoneyRatio0 > 0.2] = 0.2
@@ -368,7 +367,7 @@ class ETF_KDJ_LongShort(object):
 		plt.title(f"Total Asset Time Series Graph during {self.lots.index[0].strftime('%y%m%d')}-{self.lots.index[-1].strftime('%y%m%d')}")
 		plt.savefig(os.path.join(outdir, 
 			f"total_asset_{self.StochLen1}_{self.StochLen2}_{self.SmoothingLen1}_{self.SmoothingLen2}_{self.weight}" + \
-				f"_{self.risk_exposure}_{self.lots.index[0].strftime('%y%m%d')}_{self.lots.index[-1].strftime('%y%m%d')}.png"))
+				f"_{self.lots.index[0].strftime('%y%m%d')}_{self.lots.index[-1].strftime('%y%m%d')}.png"))
 		plt.close()
 
 		VictoryRatio = np.sum(self.lots['PnL'] > 0)/(np.sum(self.lots['PnL'] > 0) + np.sum(self.lots['PnL'] < 0)) # 胜率
@@ -417,7 +416,9 @@ class ETF_KDJ_LongShort(object):
 		del self.MoneyRatio0
 		del self.lots
 		del self.source
-		del self.result 
+		del self.result
+		del self.switch_dict
+		gc.collect()
 
 def select_params(nums):
 	for d in os.listdir(output_path):
@@ -436,13 +437,17 @@ def select_params(nums):
 					data = data[data['最大回撤'] < data['最大回撤'].quantile(0.25)].nlargest(nums, ['MAR', 'Sharpe'])
 					df_ls.append(data)
 					break
-			for row in data.values:
-				file_name = os.path.join(date_dir, f"*{int(row[0])}_{int(row[1])}_{int(row[2])}_{int(row[3])}_{row[4]}_{row[5]}*")
-				for file in glob.glob(file_name):
-					shutil.copy(file, des)
+			# 拷贝图片
+			# for row in data.values:
+			# 	if row[5] == 0 or row[5] == 1:
+			# 		file_name = os.path.join(date_dir, f"*{int(row[0])}_{int(row[1])}_{int(row[2])}_{int(row[3])}_{row[4]}_{int(row[5])}*")
+			# 	else:
+			# 		file_name = os.path.join(date_dir, f"*{int(row[0])}_{int(row[1])}_{int(row[2])}_{int(row[3])}_{row[4]}_{row[5]}*")
+			# 	for file in glob.glob(file_name):
+			# 		shutil.copy(file, des)
 
 		df_total = pd.concat(df_ls)
-		res = df_total.groupby(['StochLen1', 'StochLen2', 'SmoothingLen1', 'SmoothingLen2', 'weight', 'risk_exposure']).size().reset_index(name = 'counts')
+		res = df_total.groupby(['StochLen1', 'StochLen2', 'SmoothingLen1', 'SmoothingLen2', 'weight']).size().reset_index(name = 'counts')
 		res.sort_values('counts', ascending = False, inplace = True)
 		res = res[res['counts'] == 3]
 		res.to_csv(os.path.join(c_dir, 'para_summary.csv'), encoding='utf_8_sig', index = False)
@@ -513,7 +518,7 @@ def run(start: str, end: str, arg_mat:list, cycle:"int > 0" = 15, ETF_ls: list =
 	ch = logging.StreamHandler()
 	ch.setLevel(logging.INFO)
 	fh = logging.handlers.RotatingFileHandler(
-			os.path.join(log_path, f'log.txt'), maxBytes=20480, backupCount=10)
+			os.path.join(log_path, f'log.txt'), maxBytes=10 * 1024 * 1024, backupCount=20)
 	fh.setLevel(logging.INFO)
 	formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
 	fh.setFormatter(formatter)
@@ -528,11 +533,11 @@ def run(start: str, end: str, arg_mat:list, cycle:"int > 0" = 15, ETF_ls: list =
 
 	with open(os.path.join(outdir, f'summary_{start}_{end}.csv'), 'a', encoding='utf_8_sig', newline='') as csvfile:
 		writer_csv = csv.writer(csvfile)
-		writer_csv.writerow(['StochLen1', 'StochLen2', 'SmoothingLen1', 'SmoothingLen2', 'weight', 'risk exposure', \
+		writer_csv.writerow(['StochLen1', 'StochLen2', 'SmoothingLen1', 'SmoothingLen2', 'weight', \
 			'累计收益率', 'Sharpe', '年化收益', '胜率', '盈亏比', '最大日收益率', '最大日亏损率', '最大回撤', 'MAR', '累计手续费'])
 
 	l = Lock()
-	pool = Pool(initializer  = init, initargs = (l, q))
+	pool = Pool(maxtasksperchild = 500, initializer  = init, initargs = (l, q))
 	for row in arg_mat:
 		if row[1] < row[0] or (row[0] == row[1] and row[2] == row[3] and row[4] != 0.2):
 			continue
@@ -543,7 +548,6 @@ def run(start: str, end: str, arg_mat:list, cycle:"int > 0" = 15, ETF_ls: list =
 			args['SmoothingLen1'] = int(row[2])
 			args['SmoothingLen2'] = int(row[3])
 			args['weight'] = row[4]
-			args['risk_exposure'] = row[5]
 			pool.apply_async(run_parameters, args = (c, args, outdir, output_excel))
 	pool.close()
 	pool.join()
@@ -557,13 +561,13 @@ if __name__ == '__main__':
 	SmoothingLen = [3, 8, 13, 18]
 	weight = [0.2, 0.4, 0.6, 0.8]
 	# risk_exposure = [0]
-	risk_exposure = [0, 0.2, 0.4, 0.6, 0.8, 1]
+	# risk_exposure = [0, 0.2, 0.4, 0.6, 0.8, 1]
 
-	arg_mat = list(itertools.product(StochLen, StochLen,SmoothingLen, SmoothingLen, weight, risk_exposure))
+	arg_mat = list(itertools.product(StochLen, StochLen,SmoothingLen, SmoothingLen, weight))
 
 	start_train = ['2016.01.01', '2017.01.01', '2018.01.01']
-	end_train = ['2016.02.01', '2017.02.01', '2018.02.01']
-	# end_train = ['2018.01.01', '2019.01.01', '2020.01.01']
+	# end_train = ['2016.02.01', '2017.02.01', '2018.02.01']
+	end_train = ['2018.01.01', '2019.01.01', '2020.01.01']
 	cycle = [15, 30, 60, 120, 240]
 
 	
@@ -574,9 +578,9 @@ if __name__ == '__main__':
 	# 		run(start, end, arg_mat, c, select_ls, [], False)
 
 	
-	for c in cycle:
-		for start, end in zip(start_train, end_train):
-			run(start, end, arg_mat, c, [], future_ls, False)
+	# for c in cycle:
+	# 	for start, end in zip(start_train, end_train):
+	# 		run(start, end, arg_mat, c, [], future_ls, False)
 
 	#---------------------------------------生成train里共同的优质参数组-------------------------------------------
 
@@ -586,25 +590,25 @@ if __name__ == '__main__':
 	# 
 	# for c in cycle:
 	#     params = pd.read_csv(os.path.join(output_path, f"{c}min", 'para_summary.csv'))
-	#     pool = Pool(maxtasksperchild = 1)
-	#     pool.apply_async(run, args = ('2020.01.01', '2020.07.01', params.values, c, select_ls, [], False))
-	#     pool.close()
-	#     pool.join()
+	#     run('2020.01.01', '2020.07.01', params.values, c, select_ls, [], False)
 
 	# ---------------------------------------删去test集里不好的参数组-------------------------------------------------------
 	# 
 	# for c in cycle:
 	#     test_result = pd.read_csv(os.path.join(output_path, f"{c}min",'2020.01.01_2020.07.01', 'summary_2020.01.01_2020.07.01.csv'))
-	#     final_params = test_result[test_result['最大回撤'] < 0.1].iloc[:,:5]
-	#     print(f"Reserve Ratio: {len(final_params)}/{len(test_result)} = {len(final_params)/len(test_result)}")
+	#     final_params = test_result[test_result['MAR'] > 2].iloc[:,:6]
+	#     if len(test_result) > 0:
+	# 			print(f"Reserve Ratio: {len(final_params)}/{len(test_result)} = {len(final_params)/len(test_result)}")
 	#     final_params.to_csv(os.path.join(output_path, f"{c}min", 'final_params.csv'), index = False)
 
 	# ---------------------------------------生成全周期报告--------------------------------------------------------------
-	# 
-	# params = pd.read_csv(os.path.join(output_path, 'final_params.csv'))
-	# run('2016.01.01', '2020.07.01', params.values, 15, select_ls, future_ls, True)
-	# 
+	#
+	# cycle = [15, 240] 
+	# for c in cycle:
+	# 	params = pd.read_csv(os.path.join(output_path, f"{c}min", 'final_params.csv'))
+	# 	run('2016.01.01', '2020.07.01', params.values, c, select_ls, [], True)
+	
 	
 	# ---------------------------------------DEBUG----------------------------------------------------------------
-	# run('2016.01.01', '2016.02.01', arg_mat[:3], 15, [], future_ls, True)
+	# run('2016.01.01', '2020.07.01', [[34, 46, 18, 13, 0.4, 0]], 15, select_ls, [], True)
 	
