@@ -26,7 +26,7 @@ from guppy import hpy
 from Dolphindb_Data import GetData
 from Generate_Min_Data import generate_any_minute_data
 from Constant import future_multiplier, margin_percent, margin_multiplier, output_path, log_path
-from Constant import output_path, log_path, select_ls, future_ls, whole_ls
+from Constant import output_path, log_path, select_ls, future_ls, whole_ls, money
 from Constant import ETF_dict, commission_index, commission_bond, commission_multiplier
 
 import time
@@ -47,7 +47,6 @@ class ETF_KDJ_LongShort(object):
 			end: str，结束日期， 格式为'yyyy.mm.dd' e.g. '2020.07.06', 
 					dataEnd必须要比dataStart晚
 			circle: int,  策略所需要的分钟数
-			logger: logger class
 		"""
 		self.ETF_sym = ETF_sym
 		self.future_sym = future_sym
@@ -58,7 +57,8 @@ class ETF_KDJ_LongShort(object):
 		self.end = end
 		self.cycle: int = cycle
 
-		self.money= 100_000_000
+
+		
 		self.get = GetData()
 		self.close_df = pd.DataFrame()
 		self.get.clearcache()
@@ -304,7 +304,7 @@ class ETF_KDJ_LongShort(object):
 		close_buy_mat = self.close_buy_df[self.close_buy_df.index >= self.start_backtest].fillna(0).values
 		close_sell_mat = self.close_sell_df[self.close_sell_df.index >= self.start_backtest].fillna(0).values
 		
-		hand_mat = MoneyRatio0_mat * self.money // self.cost_perhand_mat
+		hand_mat = MoneyRatio0_mat * money // self.cost_perhand_mat
 		np.nan_to_num(hand_mat, copy = False)
 		
 		pnl = np.sum((close_sell_mat[1:, :] - close_buy_mat[:-1, :]) * hand_mat[:-1, :] * self.num_perhand_mat[:-1, :], axis = 1)
@@ -344,7 +344,7 @@ class ETF_KDJ_LongShort(object):
 			)
 		self.lots['commission'] = np.sum(commission_mat, axis = 1)
 		self.lots['PnL'] = np.concatenate(([0], pnl)) - self.lots['commission'].values
-		self.lots['total asset'] = self.lots['PnL'].cumsum() + self.money
+		self.lots['total asset'] = self.lots['PnL'].cumsum() + money
 
 		self.summary = pd.DataFrame(
 			columns = self.lots.columns[:self.MoneyRatio0.shape[1]], 
@@ -356,7 +356,7 @@ class ETF_KDJ_LongShort(object):
 		"""
 		生成报告
 		"""
-		self.lots['ret'] = self.lots['PnL'] / self.money
+		self.lots['ret'] = self.lots['PnL'] / money
 		
 		outdir = os.path.join(output_path, f"{self.cycle}min", f"{self.start_backtest.strftime('%Y.%m.%d')}_{self.end}")
 		if not os.path.exists(outdir):
@@ -538,9 +538,9 @@ def run(start: str, end: str, arg_mat:list, cycle:"int > 0" = 15, ETF_ls: list =
 			'累计收益率', 'Sharpe', '年化收益', '胜率', '盈亏比', '最大日收益率', '最大日亏损率', '最大回撤', 'MAR', '累计手续费'])
 
 	l = Lock()
-	pool = Pool(maxtasksperchild = 500, initializer  = init, initargs = (l, q))
+	pool = Pool(maxtasksperchild = 400, initializer  = init, initargs = (l, q))
 	for row in arg_mat:
-		if row[1] < row[0] or (row[0] == row[1] and row[2] == row[3] and row[4] != 0.2):
+		if row[1] < row[0] or (row[0] == row[1] and row[2] == row[3] and row[4] != 0.1): # hard code 0.1
 			continue
 		else:
 			args  = {}
@@ -558,9 +558,9 @@ if __name__ == '__main__':
 	freeze_support() # prevent raising run-time error from running the frozen executable
 
 	# 参数
-	StochLen = [5, 9, 18, 25, 34, 46, 72, 89]
-	SmoothingLen = [3, 8, 13, 18]
-	weight = [0.2, 0.4, 0.6, 0.8]
+	StochLen = [5, 9, 18, 25, 34, 46, 59, 72, 89]
+	SmoothingLen = [3, 7, 11, 15, 19, 24]
+	weight = [0.1, 0.3, 0.5, 0.7, 0.9]
 	# risk_exposure = [0]
 	# risk_exposure = [0, 0.2, 0.4, 0.6, 0.8, 1]
 
