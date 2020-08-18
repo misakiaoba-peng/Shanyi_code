@@ -1,3 +1,8 @@
+#-*-coding:utf-8-*-
+# @title: 市场监控指数
+# @author: Brian Shan
+# @date: 2020.08.11
+
 import numpy as np
 import pandas as pd
 import datetime
@@ -6,36 +11,36 @@ from datetime import datetime, timedelta
 from Dolphindb_Data import GetData
 
 class security(object):
-    def __init__(self, security_code:str, length:'int > 0' = 240 * 500):
+    def __init__(self, security_code:str, lookback_days: 'int > 0' = -500):
         self.name  = security_code
-        self.len = length
         self.get = GetData()
-        self.preLoad()
+        self.preLoad(lookback_days)
         self.sharpe = None
         self.momentum = None
         self.vol = None
-        self.num_point = 300
+        self.num_point = 200
 
         self.tick_time = None
         self.tick_high = None
         self.tick_low = None
         self.tick_close  = None
     
-    def preLoad(self):
+    def preLoad(self, lookback_days):
         today = datetime.now().date()
         data = self.get.Future_hist_Mcandle(
                     self.name, 
-                    (today + timedelta(days = -int(self.len // 240 * 1.6))).strftime("%Y.%m.%d"),
+                    (today + timedelta(days = lookback_days)).strftime("%Y.%m.%d"),
                     (today + timedelta(days = -1)).strftime("%Y.%m.%d"))
         data.replace(to_replace = [0, np.nan], method = 'ffill', inplace = True)
         data.set_index('date', inplace = True)
-        self.time = list(data.index)[-self.len:]
-        self.high = data['high'][-self.len:]
-        self.low = data['low'][-self.len:]
-        self.close = data['close'][-self.len:]
+        data.sort_index(inplace = True)
+        self.time = list(data.index)
+        self.high = data['high']
+        self.low = data['low']
+        self.close = data['close']
         
     def handler(self, tick):
-        symbol = tick[1]
+        symbol = tick[0]
         assert symbol == self.name
         cur_time = pd.Timestamp.combine(pd.to_datetime(tick[3]).date(), pd.to_datetime(tick[4]).time())
         cur_high = tick[7]
@@ -53,10 +58,10 @@ class security(object):
             self.low[temp] = self.tick_low
             self.close[temp] = self.tick_close
 
-            self.time = self.time[-self.len:]
-            self.high = self.high.iloc[-self.len:]
-            self.low = self.low.iloc[-self.len:]
-            self.close = self.close.iloc[-self.len:]
+            self.time = self.time[1:]
+            self.high = self.high.iloc[1:]
+            self.low = self.low.iloc[1:]
+            self.close = self.close.iloc[1:]
 
             self.tick_time = cur_time
             self.tick_high = cur_high
@@ -124,6 +129,7 @@ class security(object):
                         pd.Grouper(freq = cycle)).agg('last').dropna()[(-self.num_point-N):]
             self.vol_TP = (self.vol_high + self.vol_low + self.vol_close)/3
             self.vol = self.vol_TP.rolling(window = N).std(ddof = 0)[(-self.num_point):]
+            
         else:
             if cycle[-3:] == 'min': 
                 num = int(cycle[:-3])
