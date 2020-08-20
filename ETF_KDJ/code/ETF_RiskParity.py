@@ -287,7 +287,7 @@ class ETF_RiskParity(object):
 		
 		pnl = np.sum((close_sell_mat[1:, :] - close_buy_mat[:-1, :]) * hand_mat[:-1, :] * self.num_perhand_mat[:-1, :], axis = 1)
 
-		trade_mat = np.concatenate((np.mat(had_mat[0]), np.diff(hand_mat, axis = 0)))
+		trade_mat = np.concatenate((np.mat(hand_mat[0]), np.diff(hand_mat, axis = 0)))
 		trade_mat_pos = trade_mat.copy()
 		trade_mat_neg = trade_mat.copy()
 		trade_mat_pos[trade_mat_pos < 0] = 0
