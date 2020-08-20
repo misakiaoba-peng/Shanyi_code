@@ -251,7 +251,7 @@ class ETF_RiskParity(object):
 			open_p = r.agg(lambda x: x[0])
 			close_p = r.agg(lambda x: x[-1])
 			std_ret = ret.rolling(period).std(ddof = 0)
-			sharpe = (close_p - open_p)/open_p/std_ret * np.sqrt(252 * 240/self.cycle)
+			sharpe = (close_p - open_p)/open_p*(252 * 240/self.cycle/period)/(std_ret * np.sqrt(252 * 240/self.cycle))
 			return sharpe
 		
 		self.sharpe_s = Sharpe(self.close_buy_df, self.period1)
@@ -287,7 +287,7 @@ class ETF_RiskParity(object):
 		
 		pnl = np.sum((close_sell_mat[1:, :] - close_buy_mat[:-1, :]) * hand_mat[:-1, :] * self.num_perhand_mat[:-1, :], axis = 1)
 
-		trade_mat = np.concatenate((np.zeros((1,hand_mat.shape[1])), np.diff(hand_mat, axis = 0)))
+		trade_mat = np.concatenate((np.mat(had_mat[0]), np.diff(hand_mat, axis = 0)))
 		trade_mat_pos = trade_mat.copy()
 		trade_mat_neg = trade_mat.copy()
 		trade_mat_pos[trade_mat_pos < 0] = 0

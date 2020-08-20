@@ -82,10 +82,7 @@ class ETF_KDJ_LongShort(object):
 			if len(data) > 0:
 				self.etf_handler(generate_any_minute_data(data, self.cycle))
 			else:
-				if self.close_df is None:
-					self.close_df = pd.DataFrame(columns = [sym])
-				else:
-					self.close_df[sym] = np.nan
+				self.close_df[sym] = np.nan
 		
 		self.close_buy_df = self.close_df.copy() # close price for buying ETF and future
 		self.close_sell_df = self.close_df.copy() # close price for selling ETF and future
@@ -176,10 +173,7 @@ class ETF_KDJ_LongShort(object):
 				(g[0] == 11 and g[1] <= 30) or \
 				(g[0] == 15 and g[1] == 0)):
 					data.drop(g_df.index, inplace = True)
-		if self.close_df.empty:
-			self.close_df = data.copy()
-		else:
-			self.close_df = self.close_df.join(data, how = "outer", sort = True)  
+		self.close_df = self.close_df.join(data, how = "outer", sort = True)  
 		idx_nan = np.where(self.close_df[sym].isnull())[0]
 		if len(idx_nan) > 0 and len(idx_nan) != idx_nan[-1] + 1:
 			logging.warning(f"there are missing close price in stock: {sym} between {self.start}-{self.end}")
@@ -309,7 +303,7 @@ class ETF_KDJ_LongShort(object):
 		
 		pnl = np.sum((close_sell_mat[1:, :] - close_buy_mat[:-1, :]) * hand_mat[:-1, :] * self.num_perhand_mat[:-1, :], axis = 1)
 
-		trade_mat = np.concatenate((np.zeros((1,hand_mat.shape[1])), np.diff(hand_mat, axis = 0)))
+		trade_mat = np.concatenate((np.mat(had_mat[0]), np.diff(hand_mat, axis = 0)))
 		trade_mat_pos = trade_mat.copy()
 		trade_mat_neg = trade_mat.copy()
 		trade_mat_pos[trade_mat_pos < 0] = 0

@@ -24,9 +24,7 @@ from multiprocessing import Pool, freeze_support, Lock, get_logger,Queue
 import logging
 from logging.handlers import QueueHandler, QueueListener
 
-
 from Constant import money, commission, commission_multiplier, output_path, log_path
-
 
 class ETF_open_close(object):
 	def __init__(self, ETF_symbol:str, start: str, end: str):
@@ -43,14 +41,14 @@ class ETF_open_close(object):
 
 	def handler(self):
 		"""
-		Turnover在2018.02.01前后出现不一致，前为每分钟的交易额，后为累计交易额
+		Turnover在2018.01.02前后出现不一致，前为每分钟的交易额，后为累计交易额
 
 		"""
-		temp = self.data[self.data.index >= datetime(2018,2,1)]
+		temp = self.data[self.data.index >= datetime(2018,1,2)]
 		for g_key, g_df in temp.groupby(temp.index.date):
 			first_min = g_df['turnover'].iloc[0]
-			g_df['turnover'] = g_df['turnover'].diff()
-			g_df['turnover'].iloc[0] = first_min
+			g_df.loc[:, 'turnover'] = g_df['turnover'].diff()
+			g_df.loc[g_df.index[0], 'turnover'] = first_min
 			self.data.loc[g_df.index, 'turnover'] = g_df['turnover']
 	
 	def Backtest(self, **args):
@@ -71,21 +69,22 @@ class ETF_open_close(object):
 		self.trade_period = args['trade_period']
 		assert self.trade_period > 0
 		self.barrier = args['barrier']
-		assert self.barrier > 0 and self.barrier < 1
+		assert self.barrier >= 0 and self.barrier <= 1
 		g_date = self.data.groupby(self.data.index.date)
-		self.lots = pd.DataFrame(index = [k for k,_ in g_date], columns = ['buy vwap', 'touch barrier', 'sell vwap'])
+		self.lots = pd.DataFrame(
+			index = [k for k,_ in g_date], 
+			columns = ['open', 'close','buy vwap', 'touch barrier', 'sell vwap'])
 		for g_key, g_df in g_date:
-			day_open_p = g_df['open'].iloc[0]
-			bar = day_open_p * (1 - self.barrier)
+			high = g_df['open'].iloc[0]
 			turnover_buy, turnover_sell = 0, 0
 			volume_buy, volume_sell = 0, 0
 			touch_barrier = False
 			idx, idx_sell = 0, 0
 			for row in g_df.values:
-				close_p = row[4]
+				open_p = row[1]
 				volume = row[5]
 				turnover = row[6]
-				if close_p <= bar:
+				if open_p <= high * (1 - self.barrier):
 					touch_barrier = True
 				if idx < self.trade_period and not touch_barrier:
 					volume_buy += volume
@@ -97,7 +96,12 @@ class ETF_open_close(object):
 					idx_sell += 1
 				if idx_sell == self.trade_period:
 					break
-			self.lots.loc[g_key, :] = turnover_buy/volume_buy, touch_barrier, turnover_sell/volume_sell
+				high = max(high, open_p)
+			if volume_sell == 0: # 停牌
+				idx_nonzero = g_df['turnover'].to_numpy().nonzero()[0]
+				turnover_sell = g_df['turnover'].iloc[idx_nonzero[-self.trade_period:]].sum()
+				volume_sell = g_df['volume'].iloc[idx_nonzero[-self.trade_period:]].sum()
+			self.lots.loc[g_key, :] = g_df['open'].iloc[0], g_df['close'].iloc[-1], turnover_buy/volume_buy, touch_barrier, turnover_sell/volume_sell
 	
 	def generate_lots(self):
 		self.lots['hand'] = money //(100 * self.lots['buy vwap'])
@@ -153,6 +157,35 @@ class ETF_open_close(object):
 		self.result = pd.DataFrame.from_dict(result, orient='index').T
 		# self.nav_permonth = source['nav'].resample('1M').last() / source[
 		#     'nav'].resample('1M').first() - 1
+
+def select_params(nums):
+	df_ls = []
+	des = os.path.join(output_path, 'selected')
+	os.makedirs(des, exist_ok = True)
+	for date_dir, _, _ in os.walk(output_path):
+		if date_dir == output_path or date_dir == des:
+			continue
+		for f in os.listdir(date_dir):
+			if f[:7] == 'summary':
+				data = pd.read_csv(os.path.join(date_dir, f))
+				data = data[data['最大回撤'] < data['最大回撤'].quantile(0.25)].nlargest(nums, ['MAR', 'Sharpe'])
+				df_ls.append(data)
+				break
+		# 拷贝图片
+		# for row in data.values:
+		# 	if row[5] == 0 or row[5] == 1:
+		# 		file_name = os.path.join(date_dir, f"*{int(row[0])}_{int(row[1])}_{int(row[2])}_{int(row[3])}_{row[4]}_{int(row[5])}*")
+		# 	else:
+		# 		file_name = os.path.join(date_dir, f"*{int(row[0])}_{int(row[1])}_{int(row[2])}_{int(row[3])}_{row[4]}_{row[5]}*")
+		# 	for file in glob.glob(file_name):
+		# 		shutil.copy(file, des)
+
+	df_total = pd.concat(df_ls)
+	res = df_total.groupby(['trade_period', 'barrier']).size().reset_index(name = 'counts')
+	res.sort_values('counts', ascending = False, inplace = True)
+	res = res[res['counts'] == 3]
+	res.to_csv(os.path.join(output_path, 'para_summary.csv'), encoding='utf_8_sig', index = False)
+
 
 
 def run_parameters(c, args, outdir, output_excel):	
@@ -225,7 +258,7 @@ def run(start: str, end: str, arg_mat:list, stock = '510050', output_excel = Fal
 
 	with open(os.path.join(outdir, f'summary_{start}_{end}.csv'), 'a', encoding='utf_8_sig', newline='') as csvfile:
 		writer_csv = csv.writer(csvfile)
-		writer_csv.writerow(['交易周期', 'Bar值' \
+		writer_csv.writerow(['trade_period', 'barrier', \
 			'累计收益率', 'Sharpe', '年化收益', '胜率', '盈亏比', '最大日收益率', '最大日亏损率', '最大回撤', 'MAR', '累计手续费'])
 
 	l = Lock()
@@ -245,7 +278,7 @@ if __name__ == '__main__':
 
 	# 参数
 	trade_period = [5, 10, 15, 20, 25, 30]
-	barrier = [0.005, 0.0075, 0.01, 0.0125, 0.015, 0.0175, 0.02]
+	barrier = [0.0025, 0.005, 0.0075, 0.01, 0.0125, 0.015, 0.0175, 0.02, 1]
 
 	arg_mat = list(itertools.product(trade_period, barrier))
 
@@ -255,38 +288,36 @@ if __name__ == '__main__':
 	
 	# ---------------------------------------跑Train的参数------------------------------------------------------------------
 	
-	for start, end in zip(start_train, end_train):
-		run(start, end, arg_mat, '510050', False)
+	# for start, end in zip(start_train, end_train):
+	# 	run(start, end, arg_mat, '510050', False)
 
 	#---------------------------------------生成train里共同的优质参数组-------------------------------------------
 
-	# select_params(150)
+	# select_params(10)
 
 	# ---------------------------------------test------------------------------------------------------------------
 	# 
-	# for c in cycle:
-	#     params = pd.read_csv(os.path.join(output_path, f"{c}min", 'para_summary.csv'))
-	#     run('2020.01.01', '2020.07.01', params.values, c, select_ls, [], False)
+    # params = pd.read_csv(os.path.join(output_path, 'para_summary.csv'))
+    # run('2020.01.01', '2020.07.01', params.values, '510050', False)
 
 	# ---------------------------------------删去test集里不好的参数组-------------------------------------------------------
 	# 
-	# for c in cycle:
-	#     test_result = pd.read_csv(os.path.join(output_path, f"{c}min",'2020.01.01_2020.07.01', 'summary_2020.01.01_2020.07.01.csv'))
-	#     final_params = test_result[test_result['MAR'] > 2].iloc[:,:5]
-	#     if len(test_result) > 0:
-	# 			print(f"Reserve Ratio: {len(final_params)}/{len(test_result)} = {len(final_params)/len(test_result)}")
-	#     final_params.to_csv(os.path.join(output_path, f"{c}min", 'final_params.csv'), index = False)
+	# 
+   #  test_result = pd.read_csv(os.path.join(output_path,'2020.01.01_2020.07.01', 'summary_2020.01.01_2020.07.01.csv'))
+   #  final_params = test_result[test_result['MAR'] > 2].iloc[:,:2]
+   #  if len(test_result) > 0:
+			# print(f"Reserve Ratio: {len(final_params)}/{len(test_result)} = {len(final_params)/len(test_result)}")
+   #  final_params.to_csv(os.path.join(output_path, f"{c}min", 'final_params.csv'), index = False)
 
 	# ---------------------------------------生成全周期报告--------------------------------------------------------------
 	#
-	# cycle = [15, 240] 
-	# for c in cycle:
-	# 	params = pd.read_csv(os.path.join(output_path, f"{c}min", 'final_params.csv'))
-	# 	run('2016.01.01', '2020.07.01', params.values, c, select_ls, [], True)
+	
+	# params = pd.read_csv(os.path.join(output_path,'final_params.csv'))
+	# run('2016.01.01', '2020.07.01', params.values, '510050', True)
 	
 	
 	# ---------------------------------------DEBUG----------------------------------------------------------------
-	# run('2016.01.01', '2020.07.01', [[34, 46, 18, 13, 0.4, 0]], 15, select_ls, [], True)
+	run('2018.01.01', '2019.07.01', [[5, 0.0025]], '510050', True)
 		
 				
 					
