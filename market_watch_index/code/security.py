@@ -1,5 +1,5 @@
 #-*-coding:utf-8-*-
-# @title: 市场监控指数
+# @title: 证券类，用于储存每个证券的参数
 # @author: Brian Shan
 # @date: 2020.08.11
 
@@ -25,7 +25,7 @@ class security(object):
         self.tick_low = None
         self.tick_close  = None
     
-    def preLoad(self, lookback_days):
+    def preLoad(self, lookback_days:'int > 0' = -500):
         today = datetime.now().date()
         data = self.get.Future_hist_Mcandle(
                     self.name, 
@@ -39,7 +39,10 @@ class security(object):
         self.low = data['low']
         self.close = data['close']
         
-    def handler(self, tick):
+    def handler(self, tick:list):
+        """
+        处理新到的tick
+        """
         symbol = tick[0]
         assert symbol == self.name
         cur_time = pd.Timestamp.combine(pd.to_datetime(tick[3]).date(), pd.to_datetime(tick[4]).time())
@@ -68,7 +71,17 @@ class security(object):
             self.tick_low = cur_low
             self.tick_close = cur_last
 
-    def get_trend(self, cycle:str, N:int):
+    def get_trend(self, cycle:str, N:int) -> tuple:
+        """
+        得到趋势度
+
+        Args:
+            cycle: str, 回测长度，支持格式: '%{x}min' 和 'D'
+            N: int， 回溯长度
+
+        Return:
+            tuple (sharpe：pd.Series, momentum: pd.Series)
+        """
         if self.sharpe is None:
             self.trend_high = pd.Series(self.high, index = self.time).groupby(
                                 pd.Grouper(freq = cycle)).max().dropna()[(-self.num_point-N):]
@@ -119,7 +132,17 @@ class security(object):
         return self.sharpe, self.momentum
                 
 
-    def get_vol_single(self, cycle, N):
+    def get_vol_single(self, cycle:str, N:int):
+        """
+        得到单品种波动率
+
+        Args:
+            cycle: str, 回测长度，支持格式: '%{x}min' 和 'D'
+            N: int， 回溯长度
+
+        Return:
+            pd.Series
+        """
         if self.vol is None:
             self.vol_high = pd.Series(self.high, index = self.time).groupby(
                         pd.Grouper(freq = cycle)).max().dropna()[(-self.num_point-N):]

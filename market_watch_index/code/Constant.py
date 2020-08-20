@@ -1,13 +1,50 @@
-stk_ls = []
-cmdty_future_ls = ["A","AG","AL","AP","AU","B","BU","C","CF","CJ","CS","CU",
-                "EB","EG","FB","FG","FU","HC","I","J","JD","JM","L","LU","M",
-                "MA","NI","NR","OI","P","PB","PG","PP","RB","RM","RS","RU","SA",
-                "SC","SF","SM","SN","SP","SR","SS","T","TA","TF","TS","UR","V",
-                "WR","Y","ZC","ZN"]
-# cmdty_future_ls = ["A","AG", "AL","AP", "AU","B","BU","C","CF"]
-stk_idx_future_ls = ["IC","IF","IH"]
-# stk_idx_future_ls = []
 
+
+#---------------------------------------请根据需求调整参数-------------------------------------------------------
+
+# 股票代码列表
+stk_ls = []
+
+# 商品期货品种列表
+# cmdty_future_ls = ["A","AG","AL","AP","AU","B","BU","C","CF","CJ","CS","CU",
+#                 "EB","EG","FB","FG","FU","HC","I","J","JD","JM","L","LU","M",
+#                 "MA","NI","NR","OI","P","PB","PG","PP","RB","RM","RS","RU","SA",
+#                 "SC","SF","SM","SN","SP","SR","SS","T","TA","TF","TS","UR","V",
+#                 "WR","Y","ZC","ZN"]
+cmdty_future_ls = ["A","AG", "AL"]
+
+
+#股指期货代码列表
+stk_idx_future_ls = ["IC","IF","IH"]
+
+# 趋势度计算周期， 支持格式: '%{x}min' 和 'D'
+cycle_trend = '2min'  
+
+# 趋势度回溯长度
+N_trend = 200 
+
+# 单品种波动率计算周期， 支持格式:'%{x}min' 和 'D'
+cycle_vol = '2min'
+
+# 单品种波动率回溯长度
+N_vol = 200
+
+# 全商品波动率计算周期，支持格式: '%{x}min' 和 'D'
+cycle_whl = 'D'
+
+#全商品波动率回溯长度的乘数
+N_mlty = 60
+
+
+
+
+
+
+
+# ---------------------------------------下面的不用修改--------------------------------------------------------
+
+
+# 期货名字字典
 future_name_dict = {
     "A": "一号大豆",
     "AG":"银",
@@ -68,4 +105,4 @@ future_name_dict = {
     "Y":"豆油",
     "ZC":"动力煤",
     "ZN":"锌",
-        }
+    }
