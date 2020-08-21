@@ -142,10 +142,12 @@ class ETF_MS(object):
 
 
 if __name__ == '__main__':
-	logging.basicConfig(level = logging.DEBUG, format = '%(asctime)s - %(levelname)s - %(message)s', 
-		handlers = [logging.StreamHandler()])
+	logging.basicConfig(
+			level = logging.DEBUG, 
+			format = '%(asctime)s - %(levelname)s - %(message)s', 
+			handlers = [logging.StreamHandler()])
 
 	from Constant import hs300
-	c = ETF_MS(['000001', '000002'], '2020.07.01', '2020.07.31')
+	c = ETF_MS(select_ls, '2020.07.01', '2020.07.31')
 	res = c.get_MS()
 	print(res)
