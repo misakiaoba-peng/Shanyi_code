@@ -62,6 +62,7 @@ commission_sh = 0.45/10000
 commission_index = 0.23/10000
 commission_bond = 3
 commission_multiplier = 3
+commission_stock = 2/1000
 
 
 ETF_dict = {

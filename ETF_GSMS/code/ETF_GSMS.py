@@ -18,8 +18,8 @@ from pandas.tseries.offsets import BDay
 from ETF_MS import ETF_MS
 from Dolphindb_Data import GetData
 from Constant import future_multiplier, output_path, money
-from Constant import output_path, log_path, select_ls, whole_ls
-from Constant import ETF_dict, commission_multiplier
+from Constant import output_path, log_path, select_ls, whole_ls, hs300
+from Constant import ETF_dict, commission_multiplier, commission_stock
 
 import time
 from multiprocessing import Pool, freeze_support, Lock, get_logger,Queue
@@ -42,21 +42,27 @@ class ETF_GSMS(object):
 		self.start_backtest = pd.to_datetime(start)
 		self.end = end
 		self.get = GetData()
-		self.ms = ETF_MS(stock_syms, self.start, end)
+		self.ETF_MS = ETF_MS(stock_syms, self.start, end)
+		self.ms = self.ETF_MS.get_MS()
+		self.ms.fillna(value = 0, inplace = True)
 		self.open_df = pd.DataFrame()
 		self.load_data()
 
 	def load_data(self):
 		for sym in self.stock_syms:
-			data=self.get.Stock_candle(sym, self.start_backtest.strftime("%Y.%m.%d"), self.end, 'D')
+			data=self.get.Stock_candle(sym, (self.start_backtest+timedelta(days = -10)).strftime("%Y.%m.%d"), self.end, 'D')
 			if len(data) > 0:
 				self.etf_handler(data)
 			else:
 				self.open_df[sym] = np.nan
+		self.open_df.replace(to_replace = [0, np.nan], method = 'ffill', inplace = True)
 
 		self.commission_pertrade = np.zeros(self.open_df.shape)
 		for i in range(len(self.stock_syms)):
-			self.commission_pertrade[:, i] = ETF_dict[self.stock_syms[i]][1] * commission_multiplier
+			if self.stock_syms[i] in ETF_dict:
+				self.commission_pertrade[:, i] = ETF_dict[self.stock_syms[i]][1] * commission_multiplier
+			else:
+				self.commission_pertrade[:, i] = commission_stock
 
 	def etf_handler(self, data):
 		"""
@@ -65,9 +71,12 @@ class ETF_GSMS(object):
 		sym = data['symbol'].iloc[0]
 		data['date'] = data['date'].dt.date
 		data.set_index('date', inplace = True)
+		data['close'] = data['close'].shift()
+		data.open.replace(to_replace = [0], value = np.nan, inplace = True)
+		data.open.fillna(data.close, inplace = True) # fill the 0 or nan in open price with previous close
 		data = data.rename(columns = {'open': sym})[[sym]]
-		data.replace(to_replace = [0, np.nan], method = 'ffill', inplace = True)
-		self.open_df = self.open_df.join(data, how = "outer", sort = True) 
+		data = data[data.index >= self.start_backtest]
+		self.open_df = self.open_df.join(data, how = "outer", sort = True)
 
 	def Backtest(self, **args):
 		"""
@@ -87,9 +96,7 @@ class ETF_GSMS(object):
 		self.hold_number = int(args['hold_number'])
 		self.period = int(args['period'])
 		self.hold_period = int(args['hold_period'])
-		res = self.ms.get_MS()
-		res.fillna(value = 0, inplace = True)
-		self.gsms = res.rolling(window = self.period).apply(lambda x: x.sum(axis = 0)/x.std(axis = 0))
+		self.gsms = self.ms.rolling(window = self.period).apply(lambda x: x.sum(axis = 0)/x.std(axis = 0))
 		self.gsms = self.gsms[self.gsms.index >= self.start_backtest]
 		self.gsms_rank = self.gsms.rank(axis = 1)
 		num_stock = self.gsms_rank.count(axis = 1)
@@ -116,7 +123,7 @@ class ETF_GSMS(object):
 		commission_mat = turnover_mat * self.commission_pertrade
 
 
-		self.lots['commission'] = np.sum(commission_mat, axis = 1)
+		self.lots['commission'] = np.nansum(commission_mat, axis = 1)
 		self.lots['PnL'] = np.concatenate(([0], pnl)) - self.lots['commission'].values
 		self.lots['total asset'] = self.lots['PnL'].cumsum() + money
 
@@ -179,8 +186,8 @@ def select_params(nums):
 	df_ls = []
 	des = os.path.join(output_path, 'selected')
 	os.makedirs(des, exist_ok = True)
-	for date_dir, _, _ in os.walk(c_dir):
-		if date_dir == c_dir or date_dir == des:
+	for date_dir, _, _ in os.walk(output_path):
+		if date_dir == output_path or date_dir == des:
 			continue
 		for f in os.listdir(date_dir):
 			if f[:7] == 'summary':
@@ -201,7 +208,7 @@ def select_params(nums):
 	res = df_total.groupby(['hold_number', 'period', 'hold_period']).size().reset_index(name = 'counts')
 	res.sort_values('counts', ascending = False, inplace = True)
 	res = res[res['counts'] == 3]
-	res.to_csv(os.path.join(c_dir, 'para_summary.csv'), encoding='utf_8_sig', index = False)
+	res.to_csv(os.path.join(output_path, 'para_summary.csv'), encoding='utf_8_sig', index = False)
 
 def run_parameters(c, args, outdir, output_excel):
 	start = c.start_backtest.strftime('%Y.%m.%d')
@@ -296,9 +303,9 @@ if __name__ == '__main__':
 	freeze_support() # prevent raising run-time error from running the frozen executable
 
 	# 参数
-	hold_number = [1,2,3,4,5]
-	period = [20,25,30,35,40]
-	hold_period = [20,25,30,35,40,45,50,55,60]
+	hold_number = [1,2,3,4,5] # 股票持仓数
+	period = [20,25,30,35,40] # 计算GSMS的周期
+	hold_period = [20,25,30,35,40,45,50,55,60] #持有周期
 
 	arg_mat = list(itertools.product(hold_number, period, hold_period))
 
@@ -313,12 +320,12 @@ if __name__ == '__main__':
 
 	#---------------------------------------生成train里共同的优质参数组-------------------------------------------
 
-	# select_params(10)
+	# select_params(70)
 
 	# ---------------------------------------test------------------------------------------------------------------
 	# 
-    # params = pd.read_csv(os.path.join(output_path, 'para_summary.csv'))
-    # run('2020.01.01', '2020.07.01', params.values, select_ls, False)
+	# params = pd.read_csv(os.path.join(output_path, 'para_summary.csv'))
+	# run('2020.01.01', '2020.07.01', params.values, select_ls, False)
 
 	# ---------------------------------------删去test集里不好的参数组-------------------------------------------------------
 	# 
@@ -327,14 +334,14 @@ if __name__ == '__main__':
    #  final_params = test_result[test_result['MAR'] > 2].iloc[:,:2]
    #  if len(test_result) > 0:
 			# print(f"Reserve Ratio: {len(final_params)}/{len(test_result)} = {len(final_params)/len(test_result)}")
-   #  final_params.to_csv(os.path.join(output_path, f"{c}min", 'final_params.csv'), index = False)
+   #  final_params.to_csv(os.path.join(output_path, 'final_params.csv'), index = False)
 
 	# ---------------------------------------生成全周期报告--------------------------------------------------------------
 	#
 	
-	# params = pd.read_csv(os.path.join(output_path,'final_params.csv'))
-	# run('2016.01.01', '2020.07.01', params.values, select_ls, True)
+	params = pd.read_csv(os.path.join(output_path,'final_params.csv'))
+	run('2016.01.01', '2020.07.01', params.values, select_ls, True)
 	
 	
 	# ---------------------------------------DEBUG----------------------------------------------------------------
-	run('2020.03.01', '2020.07.01', [[1, 20, 30]], select_ls, True)
+	# run('2018.01.01', '2020.01.01', [[2, 20, 20]], select_ls, True)

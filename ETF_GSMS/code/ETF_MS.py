@@ -75,7 +75,7 @@ class ETF_MS(object):
 			self.askPrice1 = pd.DataFrame()
 			self.bidPrice1 = pd.DataFrame()
 			logging.info(f"start loading")
-			data = self.load_data(self.stock_syms, d.strftime("%Y.%m.%d"), fields_ls) 
+			data = self.load_data(stock_ls, d.strftime("%Y.%m.%d"), fields_ls) 
 			logging.info(f"{d} loading finished")
 			if len(data) > 0:
 				self.handler(data)
@@ -87,18 +87,18 @@ class ETF_MS(object):
 
 	def get_MS(self):
 		if os.path.isfile(MS_file_path):
-			ms_df = pd.read_csv(MS_file_path, index_col = 0, parse_dates=[0])
+			ms_df = pd.read_csv(MS_file_path, index_col = 0, parse_dates = [0])
 			stock_miss = set(self.stock_syms) - set(ms_df.columns)
 			if len(stock_miss) > 0: # 补足stock
 				res = self.makeup_data(stock_miss, date_ls = ms_df.index)
-				ms_df.loc[:, res.columns] = res
+				ms_df.loc[:, res.columns] = res # 如果这行报错请更新Pandas
 			# 补足日期
 			if self.end.date() > ms_df.index[-1].date():
-				res = self.makeup_data(ms_df.columns, ms_df.index[-1].date() + timedelta(days = 1), self.end)
+				res = self.makeup_data(list(ms_df.columns), ms_df.index[-1].date() + timedelta(days = 1), self.end)
 				for idx, row in res.iterrows():
 					ms_df.loc[idx, :] = row
 			if self.start.date() < ms_df.index[0].date(): 
-				res = self.makeup_data(ms_df.columns, self.start, ms_df.index[0].date() + timedelta(days = -1))
+				res = self.makeup_data(list(ms_df.columns), self.start, ms_df.index[0].date() + timedelta(days = -1))
 				for idx, row in res.iterrows():
 					ms_df.loc[idx, :] = row
 			ms_df.sort_index(inplace = True)
@@ -147,7 +147,7 @@ if __name__ == '__main__':
 			format = '%(asctime)s - %(levelname)s - %(message)s', 
 			handlers = [logging.StreamHandler()])
 
-	from Constant import hs300
-	c = ETF_MS(select_ls, '2020.07.01', '2020.07.31')
+	from Constant import hs300, select_ls
+	c = ETF_MS(select_ls, '2015.07.01', '2020.07.31')
 	res = c.get_MS()
 	print(res)
