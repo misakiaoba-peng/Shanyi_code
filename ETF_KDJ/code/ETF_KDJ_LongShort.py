@@ -336,14 +336,14 @@ class ETF_KDJ_LongShort(object):
 			index = self.MoneyRatio0.index, 
 			columns = [f"{i}-{ETF_dict[i][0]}" for i in self.ETF_sym] + self.future_sym
 			)
-		self.lots['commission'] = np.sum(commission_mat, axis = 1)
+		self.lots['commission'] = np.nansum(commission_mat, axis = 1)
 		self.lots['PnL'] = np.concatenate(([0], pnl)) - self.lots['commission'].values
 		self.lots['total asset'] = self.lots['PnL'].cumsum() + money
 
 		self.summary = pd.DataFrame(
 			columns = self.lots.columns[:self.MoneyRatio0.shape[1]], 
 			index = ['交易额', '最大手数', '手数中间值', '平均手数', '最小手数'])
-		self.summary.loc['交易额', :] = np.sum(turnover_mat, axis = 0)
+		self.summary.loc['交易额', :] = np.nansum(turnover_mat, axis = 0)
 		self.summary.iloc[1:, :] = self.lots.iloc[:, :self.MoneyRatio0.shape[1]].agg(['max', 'median', 'mean', 'min'], axis = 0).values.tolist()
 				
 	def performance(self):
