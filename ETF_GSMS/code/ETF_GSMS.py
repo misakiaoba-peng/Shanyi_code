@@ -122,7 +122,6 @@ class ETF_GSMS(object):
 		turnover_mat = (trade_mat_pos-trade_mat_neg) * open_buy_mat
 		commission_mat = turnover_mat * self.commission_pertrade
 
-
 		self.lots['commission'] = np.nansum(commission_mat, axis = 1)
 		self.lots['PnL'] = np.concatenate(([0], pnl)) - self.lots['commission'].values
 		self.lots['total asset'] = self.lots['PnL'].cumsum() + money
@@ -233,6 +232,7 @@ def run_parameters(c, args, outdir, output_excel):
 				f"GSMS_Arg_{'_'.join([str(i) for i  in args.values()])}_{start}_{end}.xlsx"
 				)) as writer_excel:
 			pd.DataFrame(args.items()).to_excel(writer_excel, sheet_name = "参数表")
+			c.open_df.to_excel(writer_excel, sheet_name = '开盘价')
 			c.gsms.to_excel(writer_excel, sheet_name = 'gsms')
 			c.MoneyRatio.to_excel(writer_excel, sheet_name = 'MoneyRatio0')
 			c.lots.to_excel(writer_excel, sheet_name = '仓位')
@@ -323,13 +323,13 @@ if __name__ == '__main__':
 	# select_params(70)
 
 	# ---------------------------------------test------------------------------------------------------------------
-	# 
-	# params = pd.read_csv(os.path.join(output_path, 'para_summary.csv'))
-	# run('2020.01.01', '2020.07.01', params.values, select_ls, False)
+	 
+	params = pd.read_csv(os.path.join(output_path, 'para_summary.csv'))
+	run('2020.01.01', '2020.07.01', params.values, hs300, True)
 
 	# ---------------------------------------删去test集里不好的参数组-------------------------------------------------------
-	# 
-	# 
+	 
+	 
    #  test_result = pd.read_csv(os.path.join(output_path,'2020.01.01_2020.07.01', 'summary_2020.01.01_2020.07.01.csv'))
    #  final_params = test_result[test_result['MAR'] > 2].iloc[:,:2]
    #  if len(test_result) > 0:
@@ -337,10 +337,10 @@ if __name__ == '__main__':
    #  final_params.to_csv(os.path.join(output_path, 'final_params.csv'), index = False)
 
 	# ---------------------------------------生成全周期报告--------------------------------------------------------------
-	#
 	
-	params = pd.read_csv(os.path.join(output_path,'final_params.csv'))
-	run('2016.01.01', '2020.07.01', params.values, select_ls, True)
+	
+	# params = pd.read_csv(os.path.join(output_path,'final_params.csv'))
+	# run('2016.01.01', '2020.07.01', params.values, select_ls, True)
 	
 	
 	# ---------------------------------------DEBUG----------------------------------------------------------------
