@@ -187,10 +187,10 @@ class ETF_KDJ_LongShort(object):
 		data = data.rename(columns = {'close': prod})[[prod]]
 		# 去掉非ETF交易时间的数据
 		for g, g_df in data.groupby([data.index.hour, data.index.minute]):
-			if not (g[0] == 10 or 13 <= g[0] <= 14 or \
-				(g[0] == 9 and g[1] >= 31) or \
-				(g[0] == 11 and g[1] <= 30) or \
-				(g[0] == 15 and g[1] == 0)):
+			if not (g[0] == 10 or 13 <= g[0] <= 14 or 
+			(g[0] == 9 and g[1] >= 31) or
+			(g[0] == 11 and g[1] <= 30) or
+			(g[0] == 15 and g[1] == 0)):
 					data.drop(g_df.index, inplace = True)
 
 		# attach data to the close price for buy and the close price for sell 
@@ -242,7 +242,7 @@ class ETF_KDJ_LongShort(object):
 		self.weight = args['weight']
 		# self.risk_exposure = args['risk_exposure']
 		
-		def KDJ(data, StochLen, SmoothingLen):
+		def KDJ(data: pd.DataFrame, StochLen: int, SmoothingLen: int):
 			var0 = data.rolling(StochLen).min()
 			var1 = data.rolling(StochLen).max()
 			var2 = data - var0
@@ -269,7 +269,7 @@ class ETF_KDJ_LongShort(object):
 		self.indDn = self.avg_indicator - 1.5 * self.std_indicator # 指标下轨
 		self.indicator.mask(self.indicator.gt(self.indUp, axis = 0), self.indUp, axis = 0, inplace = True)
 		self.indicator.mask(self.indicator.lt(self.indDn, axis = 0), self.indDn, axis = 0, inplace = True)
-		self.ReIndicator = self.indicator.divide(self.avg_indicator, axis = 0) - 1
+		self.ReIndicator = self.indicator.divide(self.indicator.mean(axis = 1), axis = 0) - 1
 		self.ReIndicator[self.ReIndicator[self.ETF_sym] < 0] = 0 # 不空ETF
 		# self.ReIndicator[self.future_sym] = 0 # 有future但不做future
 		self.MoneyRatio0 = self.ReIndicator.divide(self.ReIndicator.abs().sum(axis = 1), axis = 0)
@@ -605,5 +605,5 @@ if __name__ == '__main__':
 	
 	
 	# ---------------------------------------DEBUG----------------------------------------------------------------
-	run('2020.01.01', '2020.07.01', [[34, 46, 18, 13, 0.4, 0]], 15, select_ls, [], True)
+	run('2020.06.01', '2020.06.01', [[1, 2, 2, 2, 0.5]], 1, select_ls, [], True)
 	
